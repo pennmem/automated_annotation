@@ -8,7 +8,7 @@ import argparse
 # from dask.distributed import print
 
 
-def run_whisperx(in_dir, out_dir, use_gpu=False, smokescreen=False):
+def run_whisperx(in_dir, out_dir, use_gpu=False, smokescreen=False, force_recompute=False):
     # if smokescreen:
     #     from dask.distributed import print
     print('starting run_whisperx with')
@@ -23,27 +23,39 @@ def run_whisperx(in_dir, out_dir, use_gpu=False, smokescreen=False):
         print(f"The input path {in_dir} is not a directory.")
         sys.exit(1)
 
-    device = "cuda:0" if use_gpu else "cpu"
-    print("\n\n====== Device type : {} ======".format(device))
-    batch_size = 16 # reduce if low on GPU mem
-    compute_type = "float16" if use_gpu else "int8"
-    model_size = "large-v2" if not smokescreen else 'tiny.en'
-    model = whisperx.load_model(model_size, device, compute_type=compute_type)
-    
     # create a subdirectory to store all results
     assert out_dir != in_dir
     out_dir = os.path.join(out_dir, 'whisperx_out')
     os.makedirs(out_dir, exist_ok=True)
 
-    # List all .wav files in the directory
     wav_files = [f for f in os.listdir(in_dir) if f.endswith('.wav')]
-    if smokescreen: wav_files = wav_files[:1]
 
-    # Print the .wav files
+    if wav_files and not force_recompute:
+        # skip processed .wav files
+        tmp = list()
+        for file in wav_files:
+            output_name = os.path.splitext(file)[0] + ".csv"
+            savepath = os.path.join(out_dir, output_name)
+            if os.path.exists(savepath):
+                print(f'Already produced output {savepath}. Skipping {file}.')
+                continue
+            tmp.append(file)
+        wav_files = tmp
+    if smokescreen: wav_files = wav_files[:1]
+        
     if wav_files:
-        print("WAV files found:")
+        device = "cuda:0" if use_gpu else "cpu"
+        print("\n\n====== Device type : {} ======".format(device))
+        batch_size = 16 # reduce if low on GPU mem
+        compute_type = "float16" if use_gpu else "int8"
+        model_size = "large-v2" if not smokescreen else 'tiny.en'
+        model = whisperx.load_model(model_size, device, compute_type=compute_type)
+        model_a, metadata = whisperx.load_align_model(language_code="en", device=device)
+
         for file in wav_files:
             print("\n\nProcessing {}...".format(file))
+            output_name = os.path.splitext(file)[0] + ".csv"
+            savepath = os.path.join(out_dir, output_name)
             
             # define audio file
             filepath = os.path.join(in_dir, file)
@@ -59,7 +71,6 @@ def run_whisperx(in_dir, out_dir, use_gpu=False, smokescreen=False):
             # import gc; gc.collect(); torch.cuda.empty_cache(); del model
             
             # 2. Align whisper output
-            model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
             result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
             
             #print(result["segments"]) # after alignment
@@ -93,8 +104,6 @@ def run_whisperx(in_dir, out_dir, use_gpu=False, smokescreen=False):
             #print(df)
             
             # Save the DataFrame to a CSV file
-            output_name = os.path.splitext(file)[0] + ".csv"
-            savepath = os.path.join(out_dir, output_name)
             df.to_csv(savepath, index=False)
 
 
