@@ -8,11 +8,13 @@ import argparse
 # from dask.distributed import print
 
 
-def run_whisperx(in_dir, out_dir, use_gpu=False, smokescreen=False, force_recompute=False):
+def run_whisperx(in_dir, out_dir, use_gpu=False, smokescreen=False, force_recompute=False, verbose=False):
     # if smokescreen:
     #     from dask.distributed import print
     print('starting run_whisperx with')
-    print(in_dir, out_dir)
+    print(in_dir)
+    print(out_dir)
+    
     # Check if the provided directory path exists
     if not os.path.exists(in_dir):
         print(f"The input directory {in_dir} does not exist.")
@@ -24,7 +26,7 @@ def run_whisperx(in_dir, out_dir, use_gpu=False, smokescreen=False, force_recomp
         sys.exit(1)
 
     # create a subdirectory to store all results
-    assert out_dir != in_dir
+    # assert out_dir != in_dir
     out_dir = os.path.join(out_dir, 'whisperx_out')
     os.makedirs(out_dir, exist_ok=True)
 
@@ -45,7 +47,8 @@ def run_whisperx(in_dir, out_dir, use_gpu=False, smokescreen=False, force_recomp
         
     if wav_files:
         device = "cuda:0" if use_gpu else "cpu"
-        print("\n\n====== Device type : {} ======".format(device))
+        if verbose:
+            print("\n\n====== Device type : {} ======".format(device))
         batch_size = 16 # reduce if low on GPU mem
         compute_type = "float16" if use_gpu else "int8"
         model_size = "large-v2" if not smokescreen else 'tiny.en'
@@ -65,26 +68,15 @@ def run_whisperx(in_dir, out_dir, use_gpu=False, smokescreen=False, force_recomp
                 audio = audio[:len(audio) // 3]
             print('loaded audio')
             result = model.transcribe(audio, batch_size=batch_size)
-            #print(result["segments"]) # before alignment
-            
-            # delete model if low on GPU resources
-            # import gc; gc.collect(); torch.cuda.empty_cache(); del model
             
             # 2. Align whisper output
             result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
             
-            #print(result["segments"]) # after alignment
-            
-            # delete model if low on GPU resources
-            # import gc; gc.collect(); torch.cuda.empty_cache(); del model_a
-
             words, onsets, offsets, confidence = [], [], [], []
-            
             for segment in result["segments"]:
             
                 word_list = segment['words']
                 for element in word_list:
-                    #print(element)
                     word = element['word']
                     onset_time = element['start']
                     offset_time = element['end']
@@ -95,13 +87,9 @@ def run_whisperx(in_dir, out_dir, use_gpu=False, smokescreen=False, force_recomp
                     onsets.append(int(onset_time * 1000))
                     offsets.append(int(offset_time * 1000))
                     confidence.append(prob)
-                    #print(newword, int(onset_time * 1000), prob)
 
             # Create a DataFrame from the three lists
             df = pd.DataFrame({'Word': words, 'Onset': onsets, 'Offset': offsets, 'Probability': confidence})
-            
-            # Print the DataFrame (optional, for verification)
-            #print(df)
             
             # Save the DataFrame to a CSV file
             df.to_csv(savepath, index=False)

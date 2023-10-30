@@ -14,10 +14,19 @@ def main(args):
         all_output_dirs = pickle.load(f)
 
     tag = args.tag
-
+    
     if args.smokescreen:  # for quick testing with reduced inputs
-        all_input_dirs[tag] = all_input_dirs[tag][:1]
-        all_output_dirs[tag] = all_output_dirs[tag][:1]
+        # all_input_dirs[tag] = all_input_dirs[tag][:1]
+        # all_output_dirs[tag] = all_output_dirs[tag][:1]
+        
+        # debug session from mismatched sessions issue
+        for i, d in enumerate(all_input_dirs[tag]):
+            if 'LTP123' in d and 'session_5' in d:
+                print(i)
+                break
+
+        all_input_dirs[tag] = all_input_dirs[tag][i:i+1]
+        all_output_dirs[tag] = all_output_dirs[tag][i:i+1]
         # put smokescreen outputs in test/ rather than in true results/
         dirs_temp = list()
         substring = 'results'
@@ -27,9 +36,27 @@ def main(args):
             if not os.path.exists(d): os.makedirs(d)
             dirs_temp.append(d)
         all_output_dirs[tag] = dirs_temp
+    else:
+        # assert that input and output directories match on shared structure
+        splits = ['train', 'val', 'test']
+        for inp, out in zip(all_input_dirs[tag], all_output_dirs[tag]):
+            # print(inp)
+            out_split = None
+            for split in splits:
+                if split in out: out_split = split
+            if isinstance(out_split, type(None)): raise ValueError
+            out_strip = out.split(f'{tag}/{out_split}')[-1]
+            fail_match = False
+            if inp != out_strip:
+                fail_match = True
+                print(inp)
+                print(out_strip)
+                print()
+            if fail_match:
+                raise ValueError('Input/output directories do not match past {tag}/{split}!')
     
     if args.use_dask:
-        if args.smokescreen: from dask.distributed import print
+        # if args.smokescreen: from dask.distributed import print
         dask_args = {'job_name': 'auto_annotate', 'memory_per_job': "9GB", 'max_n_jobs': 150,
                     'death_timeout': 600, 'extra': ['--no-dashboard'], 'log_directory': 'logs'}
         client = CMLDask.new_dask_client_slurm(**dask_args)
