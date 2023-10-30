@@ -102,6 +102,19 @@ def word_error_rate(gt, sessnum, pred, verbose):
 
             correct = []
             pred_onsets = []
+
+            # Words for which the nearest neighbor matched word pairs do not match should be analyzed separately
+            matched_words = []
+            matched_words_onsetdiff = []
+            matched_words_probability = []
+            matched_words_gtonset = []
+
+            # mismatched words
+            mismatched_words = []
+            mismatched_words_onsetdiff = []
+            mismatched_words_probability = []
+            mismatched_words_gtonset = []
+
             for word, onset in zip(gtwords, gtOnsets):
                 if word != 'VV':
                     minonset, idx = get_closest_time(df.Onset.astype(int), int(onset))
@@ -118,6 +131,15 @@ def word_error_rate(gt, sessnum, pred, verbose):
                         out_pred_onset.append(minonset)
                         out_pred_probability.append(df.Probability[idx])
 
+                        if word == df.Word[idx]:
+                            matched_words.append(df.Word[idx]); matched_words_onsetdiff.append(minonset - int(onset))
+                            matched_words_probability.append(df.Probability[idx]); matched_words_gtonset.append(int(onset))
+                        else:
+                            mismatched_words.append(df.Word[idx]); mismatched_words_onsetdiff.append(minonset - int(onset))
+                            mismatched_words_probability.append(df.Probability[idx]); mismatched_words_gtonset.append(int(onset))
+
+            matched_data = (matched_words, matched_words_onsetdiff, matched_words_probability, matched_words_gtonset)
+            mismatched_data = (mismatched_words, mismatched_words_onsetdiff, mismatched_words_probability, mismatched_words_gtonset)
                     
 
             filtered_gtwords = [word for word in gtwords if word != 'VV']
@@ -154,7 +176,7 @@ def word_error_rate(gt, sessnum, pred, verbose):
     # return outputs
     # sanity check
     assert len(onset_diffs) == len(correctly_annotated_words) == len(out_pred_onset) == len(out_gt_onset) == len(out_pred_probability)
-    return wers, np.array(onset_diffs), correctly_annotated_words, out_pred_onset, out_pred_probability, out_gt_onset
+    return wers, np.array(onset_diffs), correctly_annotated_words, out_pred_onset, out_pred_probability, out_gt_onset, matched_data, mismatched_data
 
 
 
@@ -245,6 +267,12 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None):
     aggr_probs = []
     aggr_onsets = []
 
+    # mismatched words
+    mis_aggr_words = []
+    mis_aggr_timediffs = []
+    mis_aggr_probs = []
+    mis_aggr_onsets = []
+
 
     # for each subject, compute the metrics separately.
     for ltpsub in os.listdir(sub_path):
@@ -276,7 +304,7 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None):
                 # word error rate for single session
                 if verbose:
                     print("Processing session... ", sesh)
-                wer, diff, word, pred_onset, pred_prob, gt_onset = word_error_rate(sub_events, int(sessnum), pred_path, verbose)
+                wer, diff, word, pred_onset, pred_prob, gt_onset, match, mismatch = word_error_rate(sub_events, int(sessnum), pred_path, verbose)
 
 
                 if (np.mean(wer) < 0.1):
@@ -290,12 +318,17 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None):
                     gf_diff_means.append(np.mean(diff))
                     gf_diff_std.append(np.std(diff))
 
-                    # aggregation
-                    aggr_words.extend(word)
-                    aggr_timediffs.extend(diff)
-                    aggr_probs.extend(pred_prob)
-                    aggr_onsets.extend(gt_onset)
+                    # aggregation for matched words
+                    aggr_words.extend(match[0])
+                    aggr_timediffs.extend(match[1])
+                    aggr_probs.extend(match[2])
+                    aggr_onsets.extend(match[3])
 
+                    # aggregation for mismatched words
+                    mis_aggr_words.extend(mismatch[0])
+                    mis_aggr_timediffs.extend(mismatch[1])
+                    mis_aggr_probs.extend(mismatch[2])
+                    mis_aggr_onsets.extend(mismatch[3])
 
                 else:
                     problem_sublist.append(ltpsub)
@@ -370,9 +403,17 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None):
     'RecallTime' : aggr_onsets
     }
 
+    mismatched_data = {
+        'Word': mis_aggr_words,
+        'TimeDiff' : mis_aggr_timediffs,
+        'Probability' : mis_aggr_probs,
+        'RecallTime' :  mis_aggr_onsets
+    }
+
 
     print("\n\n====Performing subsequent analysis====")
     aggregate = pd.DataFrame(data)
+    mismatch_aggregate = pd.DataFrame(mismatched_data)
     
 
     # 3. Bias/variability of automated methods broken out by
@@ -396,7 +437,11 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None):
         file.write("mean WER : {:.4f}, CI: {}".format(result['wer'].mean(), wer_interval))
         file.write("\nmean onset difference (Prediction - GT) : {:.4f} ms, CI: {}".format(result['diff_mean'].mean(), mean_interval))
         file.write("\nstd onset difference (Prediction - GT) : {:.4f} ms, CI: {}\n\n".format(result['diff_stdev'].mean(), std_interval))
-        file.write('Leading Phonemes analysis:\n')
+
+        file.write("\n\nMean Onset Difference for Matched Words: {}\n".format(aggregate['TimeDiff'].mean()))
+        file.write("Mean Onset Difference for Mismatched Words: {}\n".format(mismatch_aggregate['TimeDiff'].mean()))
+
+        file.write('\nLeading Phonemes analysis:\n')
         file.write(phon_outtext)
         file.write('\n\nRecall Time analysis:\n')
         file.write(time_outtext)
