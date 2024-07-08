@@ -24,7 +24,7 @@ for wav in glob.glob(in_dir + '/*.wav'):
     with open('test/whisperx_vad_fun/audio/' + os.path.split(wav)[-1].split('.')[0] + '.npy', 'wb') as f:
         np.save(f, audio)
     
-#     pred = vad({"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": SAMPLE_RATE})
+    pred = vad({"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": SAMPLE_RATE})
 
-# print(pred)
+print(pred)
 # pdb.set_trace()
