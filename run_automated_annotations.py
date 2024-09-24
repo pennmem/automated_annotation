@@ -6,6 +6,9 @@ import os
 import json
 from datetime import datetime
 
+#James' change
+from automated_annot import run_whisperx, run_whisper
+
 
 def current_time_string(fmt='%Y_%m_%d__%H_%M_%S'):
     return datetime.now().strftime(fmt)
@@ -21,9 +24,9 @@ def main(args):
     # aggregate run parameters
     tag = args.tag
     
-    if 'whisperx' in tag.tolower():
+    if 'whisperx' in tag.lower():
         func = run_whisperx
-    elif 'whisper' in tag.tolower():
+    elif 'whisper' in tag.lower():
         func = run_whisper
     else: raise ValueError()
     
@@ -36,13 +39,14 @@ def main(args):
     
     if 'long-prompt' in tag:
         # word pool needs to be computed separately for each session using WORD events
-        run_args['func_args']['transcribe']['initial_prompt'] = 'The following is the word pool for a word list memory experiment. {wordpool}. Please transcribe the recorded audio of a subject recalling these words in any order along with other words they thought they studied.'
+        run_args['func_args']['transcribe']['initial_prompt'] = 'The following is the word pool for a word list memory experiment. {wordpool}. Please transcribe the recorded audio of a subject recalling these words in any order along with other words they thought they studied. Be mindful to transcribe any homonyms with the words on the list as the actual words on the list'
     elif 'short-prompt' in tag:
         # word pool needs to be computed separately for each session using WORD events
         run_args['func_args']['transcribe']['initial_prompt'] = '{wordpool}'
-        
+    out = all_output_dirs[tag][0]
     run_dir = out.split(f'{tag}')
-    assert len(tag_dir) == 2, f'Run tag {tag} occurs multiple times in output paths. Please select another run tag.'
+    # print(out)
+    assert len(run_dir) == 2, f'Run tag {tag} occurs multiple times in output paths. Please select another run tag.'
     run_dir = os.path.join(run_dir[0], tag)
     with open(os.path.join(run_dir, 'run_params.json'), 'w') as f:
         json.dump(run_args, f)
@@ -51,11 +55,13 @@ def main(args):
         # all_input_dirs[tag] = all_input_dirs[tag][:1]
         # all_output_dirs[tag] = all_output_dirs[tag][:1]
         
+        '''
         # debug session from mismatched sessions issue
         for i, d in enumerate(all_input_dirs[tag]):
             if 'LTP123' in d and 'session_5' in d:
                 print(i)
                 break
+        '''
 
         all_input_dirs[tag] = all_input_dirs[tag][i:i+1]
         all_output_dirs[tag] = all_output_dirs[tag][i:i+1]
@@ -72,7 +78,6 @@ def main(args):
         # assert that input and output directories match on shared structure
         splits = ['train', 'val', 'test']
         for inp, out in zip(all_input_dirs[tag], all_output_dirs[tag]):
-            # print(inp)
             assert inp != out
             out_split = None
             for split in splits:
@@ -82,9 +87,6 @@ def main(args):
             fail_match = False
             if inp != out_strip:
                 fail_match = True
-                print(inp)
-                print(out_strip)
-                print()
             if fail_match:
                 raise ValueError('Input/output directories do not match past {tag}/{split}!')
                 

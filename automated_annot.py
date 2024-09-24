@@ -259,6 +259,12 @@ if __name__ == "__main__":
     if not os.path.isdir(args.input_dir):
         print(f"The path {args.input_dir} is not a directory.")
         sys.exit(1)
+        
+    #added to ensure output dir is made
+    # Ensure the top-level output directory exists
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+        print(f"Created the output directory: {args.output_dir}")
 
     if args.whisper_only:
         run_whisper(args.input_dir, args.output_dir, use_gpu=args.use_gpu, smokescreen=args.smokescreen, force_recompute=args.force_recompute)
