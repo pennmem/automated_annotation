@@ -228,7 +228,8 @@ def run_confidence_analysis(df, verbose=False):
         print(result)
     return result
 
-def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None):
+def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
+                     output_subdir='whisperx_out'):
 
     # load csv file if csv file is used
     if use_csv:
@@ -242,7 +243,7 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None):
 
     # 1. word error rate analysis
     # recursively find how many patients there are
-    sub_path = find_target_folder(pred)
+    sub_path = find_target_folder(pred, output_subdir=output_subdir)
 
     sublist = []
     seshlist = []
@@ -290,7 +291,7 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None):
             sub_wers = []
 
             for sesh in sessions:
-                pred_path = os.path.join(os.path.join(single_sub_path, sesh), 'whisperx_out')
+                pred_path = os.path.join(single_sub_path, sesh, output_subdir)
 
                 # skip if there are no csv files
                 if len(os.listdir(pred_path)) == 0:
@@ -471,11 +472,11 @@ def anntopar(outdir, filename):
                 parFile.write(line)
 
 # helper function to recursively find the target directory
-def find_target_folder(input_directory):
+def find_target_folder(input_directory, output_subdir='whisperx_out'):
     # Walk through the directory recursively
     for dirpath, dirnames, filenames in os.walk(input_directory):
         # Check if current directory is "whisperx_out"
-        if os.path.basename(dirpath) == "whisperx_out":
+        if os.path.basename(dirpath) == output_subdir:
             # Check if all files in the directory are CSV files
 
             if all(filename.endswith('.csv') for filename in filenames):
@@ -502,6 +503,9 @@ if __name__ == "__main__":
     parser.add_argument('--verbose', action='store_true', default=False, help='Using this flag will execute all optional print statements for ease with debugging.')
     parser.add_argument('--use_csv', action='store_true', default=False, help='Using this flag will make the program retrieve GT data from a single csv file.')
     parser.add_argument('--csvpath', type=str, default=None, help='Path to the ground truth data (in csv format).')
+    parser.add_argument('--output_subdir', type=str, default='whisperx_out',
+                        choices=['whisper_out', 'whisperx_out', 'assemblyai_out'],
+                        help='Name of the backend output subdirectory to analyze (default: whisperx_out).')
     # Parse the arguments
     args = parser.parse_args()
 
@@ -529,6 +533,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # run the analysis
-    run_all_analysis(args.gt_dir, args.pred_dir, args.verbose, args.use_csv, args.csvpath)
+    run_all_analysis(args.gt_dir, args.pred_dir, args.verbose, args.use_csv, args.csvpath,
+                     output_subdir=args.output_subdir)
 
 

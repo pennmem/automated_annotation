@@ -1,13 +1,10 @@
-from automated_annot import run_whisperx
+from automated_annot import run_whisperx, run_whisper, run_assemblyai
 from cmldask import CMLDask
 from dask.distributed import wait
 import pickle
 import os
 import json
 from datetime import datetime
-
-#James' change
-from automated_annot import run_whisperx, run_whisper
 
 
 def current_time_string(fmt='%Y_%m_%d__%H_%M_%S'):
@@ -24,11 +21,16 @@ def main(args):
     # aggregate run parameters
     tag = args.tag
     
-    if 'whisperx' in tag.lower():
+    tag_lower = tag.lower()
+    if 'assemblyai' in tag_lower:
+        func = run_assemblyai
+    elif 'whisperx' in tag_lower:
         func = run_whisperx
-    elif 'whisper' in tag.lower():
+    elif 'whisper' in tag_lower:
         func = run_whisper
-    else: raise ValueError()
+    else:
+        raise ValueError(f"Cannot determine backend from tag '{tag}'. "
+                         f"Tag must contain one of: whisper, whisperx, assemblyai")
     
     run_args = dict()
     run_args['meta'] = dict()
@@ -101,7 +103,7 @@ def main(args):
                        [args.use_gpu] * len(all_output_dirs[tag]), 
                        [args.smokescreen] * len(all_output_dirs[tag]), 
                        [args.force_recompute] * len(all_output_dirs[tag])]
-        futures = client.map(run_whisperx, *dask_inputs)
+        futures = client.map(func, *dask_inputs)
         wait(futures)
     else:
         for in_dir, out_dir in zip(all_input_dirs[tag], all_output_dirs[tag]):
