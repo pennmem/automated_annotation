@@ -7,6 +7,7 @@ import argparse
 import warnings
 
 from backends import get_backend
+from postprocessing import build_context, build_output_rules, apply_output_rules
 
 
 # ─── Whisper-specific helpers (kept for external callers) ───
@@ -102,6 +103,14 @@ def run_transcription(in_dir, out_dir, backend_name, args=dict(),
     if wav_files:
         backend.load_model(use_gpu=use_gpu, smokescreen=smokescreen, args=args, device=device)
 
+        # BUILD CONTEXT
+        # context = build_context(in_dir, args)
+        # output_rules = build_output_rules(args)
+        # if verbose and context.get('wordpool'):
+        #     print(f"Loaded wordpool with {len(context['wordpool'])} words")
+        # if verbose and output_rules:
+        #     print(f"Output rules: {[type(r).__name__ for r in output_rules]}")
+
         for file in wav_files:
             print(f"\n\nProcessing {file}...")
             filepath = os.path.join(in_dir, file)
@@ -109,6 +118,8 @@ def run_transcription(in_dir, out_dir, backend_name, args=dict(),
             savepath = os.path.join(out_dir, base_name + ".csv")
 
             df = backend.transcribe_file(filepath, smokescreen=smokescreen, args=args)
+            # OUTPUT RILES
+            # df = apply_output_rules(df, output_rules, context)
             df.to_csv(savepath, index=False)
 
             backend.save_raw_output(out_dir, base_name)

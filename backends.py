@@ -67,12 +67,12 @@ class WhisperBackend(TranscriptionBackend):
         model_size = "large-v2" if not smokescreen else 'tiny.en'
         try:
             compute_type = "float16" if dev == "cuda" else "int8"
-            self.model = whisperx.load_model(model_size, dev, device_index=dev_idx, compute_type=compute_type)
+            self.model = whisperx.load_model(model_size, dev, device_index=dev_idx, compute_type=compute_type, language="en")
         except ValueError:
             print(f"WARNING: Failed to load model on {dev}:{dev_idx}, falling back to CPU")
             dev = "cpu"
             dev_idx = 0
-            self.model = whisperx.load_model(model_size, dev, compute_type="int8")
+            self.model = whisperx.load_model(model_size, dev, compute_type="int8", language="en")
         self.device = dev
 
     def transcribe_file(self, filepath, smokescreen, args):
@@ -83,7 +83,7 @@ class WhisperBackend(TranscriptionBackend):
             audio = audio[:len(audio) // 3]
 
         transcribe_args = args.get('transcribe', {})
-        result = self.model.transcribe(audio, batch_size=self.batch_size, **transcribe_args)
+        result = self.model.transcribe(audio, batch_size=self.batch_size, language="en", **transcribe_args)
 
         self._last_raw_result = result
 
@@ -147,11 +147,11 @@ class WhisperXBackend(TranscriptionBackend):
             model_size = "large-v2" if not smokescreen else 'tiny.en'
             try:
                 compute_type = "float16" if dev == "cuda" else "int8"
-                self.model = whisperx.load_model(model_size, "cuda", device_index=0, compute_type=compute_type)
+                self.model = whisperx.load_model(model_size, "cuda", device_index=0, compute_type=compute_type, language="en")
             except ValueError:
                 print(f"WARNING: Failed to load model on GPU {dev_idx}, falling back to CPU")
                 self.device = "cpu"
-                self.model = whisperx.load_model(model_size, "cpu", compute_type="int8")
+                self.model = whisperx.load_model(model_size, "cpu", compute_type="int8", language="en")
 
         self.model_a, self.metadata = whisperx.load_align_model(
             language_code="en", device=self.device
@@ -171,7 +171,7 @@ class WhisperXBackend(TranscriptionBackend):
                 result = json.load(f)
         else:
             transcribe_args = args.get('transcribe', {})
-            result = self.model.transcribe(audio, batch_size=self.batch_size, **transcribe_args)
+            result = self.model.transcribe(audio, batch_size=self.batch_size, language="en", **transcribe_args)
 
         result = whisperx.align(
             result["segments"], self.model_a, self.metadata,
