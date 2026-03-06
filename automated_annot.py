@@ -59,7 +59,7 @@ def clean_whisper_transcript(transcript, model_dictionary=None, model_lang='en')
 # ─── Generic transcription runner ───
 
 def run_transcription(in_dir, out_dir, backend_name, args=dict(),
-                      use_gpu=False, smokescreen=False, force_recompute=False, verbose=False):
+                      use_gpu=False, device=None, smokescreen=False, force_recompute=False, verbose=False):
     """Generic transcription runner that delegates to a backend.
 
     Handles all shared boilerplate: input validation, output dir creation,
@@ -100,7 +100,7 @@ def run_transcription(in_dir, out_dir, backend_name, args=dict(),
         wav_files = wav_files[:1]
 
     if wav_files:
-        backend.load_model(use_gpu=use_gpu, smokescreen=smokescreen, args=args)
+        backend.load_model(use_gpu=use_gpu, smokescreen=smokescreen, args=args, device=device)
 
         for file in wav_files:
             print(f"\n\nProcessing {file}...")
@@ -116,24 +116,27 @@ def run_transcription(in_dir, out_dir, backend_name, args=dict(),
 
 # ─── Backward-compatible wrappers ───
 
-def run_whisper(in_dir, out_dir, args=dict(),
-                use_gpu=False, smokescreen=False, force_recompute=False, verbose=False):
-    run_transcription(in_dir, out_dir, 'whisper', args=args,
-                      use_gpu=use_gpu, smokescreen=smokescreen,
+def run_whisper(in_dir, out_dir,
+                use_gpu=False, device=None, smokescreen=False, force_recompute=False,
+                args=None, verbose=False):
+    run_transcription(in_dir, out_dir, 'whisper', args=args or {},
+                      use_gpu=use_gpu, device=device, smokescreen=smokescreen,
                       force_recompute=force_recompute, verbose=verbose)
 
 
-def run_whisperx(in_dir, out_dir, args=dict(),
-                 use_gpu=False, smokescreen=False, force_recompute=False, verbose=False):
-    run_transcription(in_dir, out_dir, 'whisperx', args=args,
-                      use_gpu=use_gpu, smokescreen=smokescreen,
+def run_whisperx(in_dir, out_dir,
+                 use_gpu=False, device=None, smokescreen=False, force_recompute=False,
+                 args=None, verbose=False):
+    run_transcription(in_dir, out_dir, 'whisperx', args=args or {},
+                      use_gpu=use_gpu, device=device, smokescreen=smokescreen,
                       force_recompute=force_recompute, verbose=verbose)
 
 
-def run_assemblyai(in_dir, out_dir, args=dict(),
-                   use_gpu=False, smokescreen=False, force_recompute=False, verbose=False):
-    run_transcription(in_dir, out_dir, 'assemblyai', args=args,
-                      use_gpu=use_gpu, smokescreen=smokescreen,
+def run_assemblyai(in_dir, out_dir,
+                   use_gpu=False, device=None, smokescreen=False, force_recompute=False,
+                   args=None, verbose=False):
+    run_transcription(in_dir, out_dir, 'assemblyai', args=args or {},
+                      use_gpu=use_gpu, device=device, smokescreen=smokescreen,
                       force_recompute=force_recompute, verbose=verbose)
 
 
@@ -142,6 +145,8 @@ if __name__ == "__main__":
     parser.add_argument('--input_dir', type=str, required=True, help='Path to the input directory.')
     parser.add_argument('--output_dir', type=str, required=True, help='Path to the output directory.')
     parser.add_argument('--use_gpu', action='store_true', default=False, help='Flag to use GPU.')
+    parser.add_argument('--device', type=str, default=None,
+                        help='Device string (e.g. cuda:0, cuda:1, cpu). Overrides --use_gpu.')
     parser.add_argument('--backend', type=str, default='whisperx',
                         choices=['whisper', 'whisperx', 'assemblyai'],
                         help='Transcription backend to use (default: whisperx)')
@@ -171,5 +176,6 @@ if __name__ == "__main__":
         backend = 'whisper'
 
     run_transcription(args.input_dir, args.output_dir, backend,
-                      use_gpu=args.use_gpu, smokescreen=args.smokescreen,
+                      use_gpu=args.use_gpu, device=args.device,
+                      smokescreen=args.smokescreen,
                       force_recompute=args.force_recompute, verbose=True)

@@ -1,10 +1,34 @@
 from automated_annot import run_whisperx, run_whisper, run_assemblyai
+from backends import get_backend
 from cmldask import CMLDask
 from dask.distributed import wait
 import pickle
 import os
 import json
 from datetime import datetime
+
+
+def session_complete(out_dir, in_dir, backend_name):
+    """Check if all WAV files in in_dir already have CSV outputs in out_dir.
+
+    Returns True if every .wav file has a corresponding .csv in the backend
+    output subdirectory, meaning the session can be skipped.
+    """
+    backend = get_backend(backend_name)
+    full_out_dir = os.path.join(out_dir, backend.output_subdir)
+
+    if not os.path.isdir(full_out_dir):
+        return False
+
+    wav_files = [f for f in os.listdir(in_dir) if f.endswith('.wav')]
+    if not wav_files:
+        return True  # nothing to do
+
+    for f in wav_files:
+        csv_name = os.path.splitext(f)[0] + ".csv"
+        if not os.path.exists(os.path.join(full_out_dir, csv_name)):
+            return False
+    return True
 
 
 def current_time_string(fmt='%Y_%m_%d__%H_%M_%S'):
@@ -92,24 +116,51 @@ def main(args):
             if fail_match:
                 raise ValueError('Input/output directories do not match past {tag}/{split}!')
                 
+    # session-level checkpointing: skip sessions where all outputs exist
+    if not args.force_recompute:
+        # determine backend name from tag
+        tag_lower = tag.lower()
+        if 'assemblyai' in tag_lower:
+            backend_name = 'assemblyai'
+        elif 'whisperx' in tag_lower:
+            backend_name = 'whisperx'
+        else:
+            backend_name = 'whisper'
+
+        filtered_in, filtered_out = [], []
+        skipped = 0
+        for in_d, out_d in zip(all_input_dirs[tag], all_output_dirs[tag]):
+            if os.path.isdir(in_d) and session_complete(out_d, in_d, backend_name):
+                skipped += 1
+            else:
+                filtered_in.append(in_d)
+                filtered_out.append(out_d)
+        if skipped:
+            print(f"Skipped {skipped} already-complete sessions. {len(filtered_in)} remaining.")
+        all_input_dirs[tag] = filtered_in
+        all_output_dirs[tag] = filtered_out
+
     # run models
     if args.use_dask:
         # if args.smokescreen: from dask.distributed import print
         dask_args = {'job_name': 'auto_annotate', 'memory_per_job': "9GB", 'max_n_jobs': 150,
                     'death_timeout': 600, 'extra': ['--no-dashboard'], 'log_directory': 'logs'}
         client = CMLDask.new_dask_client_slurm(**dask_args)
-        dask_inputs = [all_input_dirs[tag], 
-                       all_output_dirs[tag], 
-                       [args.use_gpu] * len(all_output_dirs[tag]), 
-                       [args.smokescreen] * len(all_output_dirs[tag]), 
-                       [args.force_recompute] * len(all_output_dirs[tag])]
+        n = len(all_output_dirs[tag])
+        dask_inputs = [all_input_dirs[tag],
+                       all_output_dirs[tag],
+                       [args.use_gpu] * n,
+                       [args.device] * n,
+                       [args.smokescreen] * n,
+                       [args.force_recompute] * n]
         futures = client.map(func, *dask_inputs)
         wait(futures)
     else:
         for in_dir, out_dir in zip(all_input_dirs[tag], all_output_dirs[tag]):
-            func(in_dir, out_dir, 
-                 use_gpu=args.use_gpu, 
-                 smokescreen=args.smokescreen, 
+            func(in_dir, out_dir,
+                 use_gpu=args.use_gpu,
+                 device=args.device,
+                 smokescreen=args.smokescreen,
                  force_recompute=args.force_recompute)
     
     # save out run completion timestamp
@@ -124,7 +175,9 @@ if __name__ == '__main__':
     parser.add_argument('--tag', type=str, default='base-whisperx', help="Tag value. Default is 'base-whisperx'.")
     parser.add_argument('--use-dask', action='store_true', help="Flag to use dask. Default is False.")
     parser.add_argument('--use-gpu', action='store_true', help="Flag to use GPU. Default is False.")
-    parser.add_argument('--smokescreen', action='store_true', dest='smokescreen', 
+    parser.add_argument('--device', type=str, default=None,
+                        help="Device string (e.g. cuda:0, cuda:1, cpu). Overrides --use-gpu when set.")
+    parser.add_argument('--smokescreen', action='store_true', dest='smokescreen',
                         help="Flag to enable smokescreen run for quick tests.")
     parser.add_argument('--force_recompute', action='store_true', 
                         help="Flag to force results recomputation. Otherwise, audio recordings with saved annotation outputs will be skipped.")

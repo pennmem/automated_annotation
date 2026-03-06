@@ -9,24 +9,13 @@ from abc import ABC, abstractmethod
 STANDARD_COLUMNS = ['Word', 'Onset', 'Offset', 'Probability']
 
 
-def _parse_device(device_str):
-    """Parse a device string like 'cuda:2' into ('cuda', 2) for ctranslate2/whisperx.
-
-    Returns (device, device_index) tuple. For 'cpu' or 'cuda', device_index is 0.
-    """
-    if ':' in device_str:
-        base, idx = device_str.split(':', 1)
-        return base, int(idx)
-    return device_str, 0
-
-
 class TranscriptionBackend(ABC):
     """Abstract base class for transcription backends."""
 
     output_subdir: str = None
 
     @abstractmethod
-    def load_model(self, use_gpu, smokescreen, args, device=None):
+    def load_model(self, use_gpu, smokescreen, args):
         """Load model/resources. Called once before processing files."""
         pass
 
@@ -53,27 +42,14 @@ class WhisperBackend(TranscriptionBackend):
         self.model = None
         self.batch_size = 16
 
-    def load_model(self, use_gpu, smokescreen, args, device=None):
-        import torch
+    def load_model(self, use_gpu, smokescreen, args):
         import whisperx
 
-        if device is None:
-            if use_gpu and torch.cuda.is_available():
-                device = "cuda"
-            else:
-                device = "cpu"
-        dev, dev_idx = _parse_device(device)
-        print(f"WhisperBackend: device={dev}, device_index={dev_idx}")
+        device = "cuda:0" if use_gpu else "cpu"
+        compute_type = "float16" if use_gpu else "int8"
         model_size = "large-v2" if not smokescreen else 'tiny.en'
-        try:
-            compute_type = "float16" if dev == "cuda" else "int8"
-            self.model = whisperx.load_model(model_size, dev, device_index=dev_idx, compute_type=compute_type)
-        except ValueError:
-            print(f"WARNING: Failed to load model on {dev}:{dev_idx}, falling back to CPU")
-            dev = "cpu"
-            dev_idx = 0
-            self.model = whisperx.load_model(model_size, dev, compute_type="int8")
-        self.device = dev
+        self.model = whisperx.load_model(model_size, device, compute_type=compute_type)
+        self.device = device
 
     def transcribe_file(self, filepath, smokescreen, args):
         import whisperx
@@ -120,23 +96,11 @@ class WhisperXBackend(TranscriptionBackend):
         self.batch_size = 16
         self.whisper_dir = None
 
-    def load_model(self, use_gpu, smokescreen, args, device=None):
-        import torch
+    def load_model(self, use_gpu, smokescreen, args):
         import whisperx
 
-        if device is None:
-            if use_gpu and torch.cuda.is_available():
-                device = "cuda"
-            else:
-                device = "cpu"
-        dev, dev_idx = _parse_device(device)
-        if dev == "cuda":
-            # Pin this process to a single physical GPU via CUDA_VISIBLE_DEVICES.
-            # After this, "cuda:0" / "cuda" refers to the selected physical GPU.
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(dev_idx)
-            torch.cuda.set_device(0)
-        self.device = "cuda" if dev == "cuda" else "cpu"
-        print(f"WhisperXBackend: physical GPU={dev_idx}, CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')}")
+        device = "cuda:0" if use_gpu else "cpu"
+        self.device = device
 
         whisper_dir = None
         if args and 'whisperx_args' in args and 'whisper_dir' in args['whisperx_args']:
@@ -144,17 +108,12 @@ class WhisperXBackend(TranscriptionBackend):
         self.whisper_dir = whisper_dir
 
         if not whisper_dir:
+            compute_type = "float16" if use_gpu else "int8"
             model_size = "large-v2" if not smokescreen else 'tiny.en'
-            try:
-                compute_type = "float16" if dev == "cuda" else "int8"
-                self.model = whisperx.load_model(model_size, "cuda", device_index=0, compute_type=compute_type)
-            except ValueError:
-                print(f"WARNING: Failed to load model on GPU {dev_idx}, falling back to CPU")
-                self.device = "cpu"
-                self.model = whisperx.load_model(model_size, "cpu", compute_type="int8")
+            self.model = whisperx.load_model(model_size, device, compute_type=compute_type)
 
         self.model_a, self.metadata = whisperx.load_align_model(
-            language_code="en", device=self.device
+            language_code="en", device=device
         )
 
     def transcribe_file(self, filepath, smokescreen, args):
@@ -205,7 +164,7 @@ class AssemblyAIBackend(TranscriptionBackend):
     def __init__(self):
         self.transcriber = None
 
-    def load_model(self, use_gpu, smokescreen, args, device=None):
+    def load_model(self, use_gpu, smokescreen, args):
         import assemblyai as aai
 
         api_key = os.environ.get('ASSEMBLYAI_API_KEY')
