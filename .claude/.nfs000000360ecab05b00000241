@@ -6,8 +6,7 @@
       "Read(//data1/eeg/scalp/ltp/**)",
       "Bash(find /data/eeg/scalp/ltp/ltpFR2 -name *.json)",
       "Bash(find /data/eeg/scalp/ltp/ltpFR2 -name *.ann)",
-      "Bash(find /data/eeg/scalp/ltp/VCBehOnly -name *.json)",
-      "Bash(conda info:*)"
+      "Bash(find /data/eeg/scalp/ltp/VCBehOnly -name *.json)"
     ]
   }
 }
