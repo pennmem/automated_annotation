@@ -60,7 +60,8 @@ def clean_whisper_transcript(transcript, model_dictionary=None, model_lang='en')
 # ─── Generic transcription runner ───
 
 def run_transcription(in_dir, out_dir, backend_name, args=dict(),
-                      use_gpu=False, device=None, smokescreen=False, force_recompute=False, verbose=False):
+                      use_gpu=False, device=None, smokescreen=False, force_recompute=False, verbose=False,
+                      **kwargs):
     """Generic transcription runner that delegates to a backend.
 
     Handles all shared boilerplate: input validation, output dir creation,
@@ -101,15 +102,15 @@ def run_transcription(in_dir, out_dir, backend_name, args=dict(),
         wav_files = wav_files[:1]
 
     if wav_files:
-        backend.load_model(use_gpu=use_gpu, smokescreen=smokescreen, args=args, device=device)
+        backend.load_model(smokescreen=smokescreen, args=args, use_gpu=use_gpu, device=device, **kwargs)
 
         # BUILD CONTEXT
-        # context = build_context(in_dir, args)
-        # output_rules = build_output_rules(args)
-        # if verbose and context.get('wordpool'):
-        #     print(f"Loaded wordpool with {len(context['wordpool'])} words")
-        # if verbose and output_rules:
-        #     print(f"Output rules: {[type(r).__name__ for r in output_rules]}")
+        context = build_context(in_dir, args)
+        output_rules = build_output_rules(args)
+        if verbose and context.get('wordpool'):
+            print(f"Loaded wordpool with {len(context['wordpool'])} words")
+        if verbose and output_rules:
+            print(f"Output rules: {[type(r).__name__ for r in output_rules]}")
 
         for file in wav_files:
             print(f"\n\nProcessing {file}...")
@@ -117,9 +118,18 @@ def run_transcription(in_dir, out_dir, backend_name, args=dict(),
             base_name = os.path.splitext(file)[0]
             savepath = os.path.join(out_dir, base_name + ".csv")
 
-            df = backend.transcribe_file(filepath, smokescreen=smokescreen, args=args)
-            # OUTPUT RILES
-            # df = apply_output_rules(df, output_rules, context)
+            # Load per-file .lst words (e.g. 0.lst for 0.wav)
+            lst_path = os.path.join(in_dir, base_name + ".lst")
+            if os.path.exists(lst_path):
+                with open(lst_path) as f:
+                    context['file_list_words'] = {
+                        line.strip().upper() for line in f if line.strip()
+                    }
+            else:
+                context['file_list_words'] = None
+
+            df = backend.transcribe_file(filepath, smokescreen=smokescreen, args=args, context=context)
+            df = apply_output_rules(df, output_rules, context)
             df.to_csv(savepath, index=False)
 
             backend.save_raw_output(out_dir, base_name)
@@ -129,26 +139,29 @@ def run_transcription(in_dir, out_dir, backend_name, args=dict(),
 
 def run_whisper(in_dir, out_dir,
                 use_gpu=False, device=None, smokescreen=False, force_recompute=False,
-                args=None, verbose=False):
+                args=None, verbose=False, model_size=None):
     run_transcription(in_dir, out_dir, 'whisper', args=args or {},
                       use_gpu=use_gpu, device=device, smokescreen=smokescreen,
-                      force_recompute=force_recompute, verbose=verbose)
+                      force_recompute=force_recompute, verbose=verbose,
+                      model_size=model_size)
 
 
 def run_whisperx(in_dir, out_dir,
                  use_gpu=False, device=None, smokescreen=False, force_recompute=False,
-                 args=None, verbose=False):
+                 args=None, verbose=False, model_size=None):
     run_transcription(in_dir, out_dir, 'whisperx', args=args or {},
                       use_gpu=use_gpu, device=device, smokescreen=smokescreen,
-                      force_recompute=force_recompute, verbose=verbose)
+                      force_recompute=force_recompute, verbose=verbose,
+                      model_size=model_size)
 
 
 def run_assemblyai(in_dir, out_dir,
-                   use_gpu=False, device=None, smokescreen=False, force_recompute=False,
-                   args=None, verbose=False):
+                   smokescreen=False, force_recompute=False,
+                   args=None, verbose=False, speech_models=None):
     run_transcription(in_dir, out_dir, 'assemblyai', args=args or {},
-                      use_gpu=use_gpu, device=device, smokescreen=smokescreen,
-                      force_recompute=force_recompute, verbose=verbose)
+                      smokescreen=smokescreen,
+                      force_recompute=force_recompute, verbose=verbose,
+                      speech_model=speech_models)
 
 
 if __name__ == "__main__":

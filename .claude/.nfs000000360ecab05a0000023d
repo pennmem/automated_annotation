@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//data10/eeg/scalp/ltp/ltpFR2/**)"
+    ]
+  }
+}

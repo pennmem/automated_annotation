@@ -11,6 +11,53 @@ import scipy.stats as st
 DIFF_THRESHOLD = 1000
 
 
+def build_gt_events_csv(experiment='ltpFR2', output_path=None):
+    """Build a ground-truth events CSV from CML for all subjects/sessions.
+
+    Loads the CML data index, iterates over every session for the given
+    experiment, reads events via CMLReader, filters to WORD and REC_WORD
+    types, and concatenates into a single DataFrame saved to output_path.
+
+    Returns the concatenated DataFrame.
+    """
+    from cmlreaders import CMLReader, get_data_index
+
+    df = get_data_index()
+    exp_df = df[df['experiment'] == experiment]
+
+    all_frames = []
+    for _, row in exp_df.iterrows():
+        subject = row['subject']
+        session = row['session']
+        montage = row.get('montage', 0)
+        localization = row.get('localization', 0)
+        try:
+            reader = CMLReader(subject, experiment, session,
+                               montage=montage, localization=localization)
+            evs = reader.load('events')
+            filtered = evs.query("type == 'WORD' or type == 'REC_WORD'")
+            if len(filtered) > 0:
+                all_frames.append(filtered)
+        except Exception as e:
+            print(f"WARNING: Failed to load events for {subject} session {session}: {e}")
+            continue
+
+    if not all_frames:
+        raise RuntimeError(f"No events loaded for experiment {experiment}")
+
+    result = pd.concat(all_frames, ignore_index=True)
+    print(f"Built GT events: {len(result)} rows, "
+          f"{result['subject'].nunique()} subjects, "
+          f"{experiment}")
+
+    if output_path:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        result.to_csv(output_path, index=False)
+        print(f"Saved to {output_path}")
+
+    return result
+
+
 # imported from verify_annotation.py
 def get_closest_time(testing_times, true_time):
     """
@@ -47,6 +94,7 @@ def word_error_rate(gt, sessnum, pred, verbose):
             df = pd.read_csv(os.path.join(pred, csvfile))
 
             # to handle edge cases
+            df = df.dropna(subset=['Onset', 'Offset']).reset_index(drop=True)
             if len(df) == 0:
                 continue
 
@@ -228,22 +276,57 @@ def run_confidence_analysis(df, verbose=False):
         print(result)
     return result
 
+
+def run_word_analysis(df, verbose=False):
+    """Onset error grouped by word within the wordpool."""
+    result = df.groupby('Word')['TimeDiff'].agg(['mean', 'std', 'count']).sort_values(by='mean', ascending=True)
+    if verbose:
+        print(result)
+    return result
+
+
+def run_cluster_analysis(df, cluster_threshold_ms=1500, verbose=False):
+    """Compare onset error for standalone vs clustered words.
+
+    A word is 'clustered' if the previous word's ground-truth onset is
+    within cluster_threshold_ms of the current word's onset.
+    Words are sorted by RecallTime within the aggregate, so consecutive
+    rows approximate consecutive recalls within a trial.
+    """
+    df_sorted = df.sort_values('RecallTime').copy()
+    prev_onset = df_sorted['RecallTime'].shift(1)
+    ioi = df_sorted['RecallTime'] - prev_onset
+    df_sorted['WordType'] = np.where(ioi <= cluster_threshold_ms, 'Clustered', 'Standalone')
+    # First word in each trial has NaN IOI → standalone
+    df_sorted['WordType'] = df_sorted['WordType'].fillna('Standalone')
+
+    result = df_sorted.groupby('WordType')['TimeDiff'].agg(['mean', 'std', 'count'])
+    if verbose:
+        print(result)
+    return result, df_sorted
+
 def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
-                     output_subdir='whisperx_out'):
+                     output_subdir='whisperx_out', experiment='ltpFR2'):
 
     # load csv file if csv file is used
     if use_csv:
-        if verbose:
-            print("\nLoading GT data files...")
-        gt_df = pd.read_csv(csvpath)
+        if csvpath and os.path.exists(csvpath):
+            if verbose:
+                print(f"\nLoading GT data from {csvpath}...")
+            gt_df = pd.read_csv(csvpath)
+        else:
+            print(f"GT CSV not found at {csvpath}, building from CML...")
+            gt_df = build_gt_events_csv(experiment=experiment, output_path=csvpath)
 
         if verbose:
-            print("Done")
+            print(f"Done. GT has {gt_df['subject'].nunique()} subjects, {len(gt_df)} rows.")
 
 
     # 1. word error rate analysis
     # recursively find how many patients there are
     sub_path = find_target_folder(pred, output_subdir=output_subdir)
+    if verbose:
+        print(f"Found target folder: {sub_path}")
 
     sublist = []
     seshlist = []
@@ -415,7 +498,10 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
     print("\n\n====Performing subsequent analysis====")
     aggregate = pd.DataFrame(data)
     mismatch_aggregate = pd.DataFrame(mismatched_data)
-    
+
+    # Save aggregate word-level data for downstream plotting
+    aggregate.to_csv(os.path.join(pred, "aggregate_words.csv"), index=False)
+    mismatch_aggregate.to_csv(os.path.join(pred, "aggregate_mismatched.csv"), index=False)
 
     # 3. Bias/variability of automated methods broken out by
     # leading phonemes
@@ -423,13 +509,21 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
     phon_outtext = phon_results.to_string()
 
     #Word in word pool
+    word_results = run_word_analysis(aggregate, verbose)
+    word_outtext = word_results.to_string()
+
+    # Standalone vs clustered
+    cluster_results, cluster_df = run_cluster_analysis(aggregate, verbose=verbose)
+    cluster_outtext = cluster_results.to_string()
 
     # Time within recall phase
     # recall duration is how long? (75s or 90s)?
-    time_outtext = run_recall_time_analysis(aggregate, verbose).to_string()
+    time_results = run_recall_time_analysis(aggregate, verbose)
+    time_outtext = time_results.to_string()
 
     #Confidence level.
-    conf_outtext = run_confidence_analysis(aggregate, verbose).to_string()
+    conf_results = run_confidence_analysis(aggregate, verbose)
+    conf_outtext = conf_results.to_string()
 
     # write summary statistics to a text file
     txtpath = os.path.join(pred, "summary_stats.txt")
@@ -444,13 +538,36 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
 
         file.write('\nLeading Phonemes analysis:\n')
         file.write(phon_outtext)
+        file.write('\n\nWord-level analysis:\n')
+        file.write(word_outtext)
+        file.write('\n\nStandalone vs Clustered analysis:\n')
+        file.write(cluster_outtext)
         file.write('\n\nRecall Time analysis:\n')
         file.write(time_outtext)
         file.write('\n\nConfidence level analysis:\n')
         file.write(conf_outtext)
 
-
-    return
+    return {
+        # word-level aggregates
+        'aggregate':          aggregate,
+        'mismatch_aggregate': mismatch_aggregate,
+        # session / subject summaries
+        'results':            out_df,
+        'good_futures':       out_df3,
+        'problem_sessions':   out_df2,
+        'subject_means':      result,
+        # confidence intervals
+        'wer_ci':             wer_interval,
+        'mean_ci':            mean_interval,
+        'std_ci':             std_interval,
+        # sub-analyses (DataFrames)
+        'phoneme':            phon_results,
+        'word':               word_results,
+        'cluster':            cluster_results,
+        'cluster_df':         cluster_df,
+        'recall_time':        time_results,
+        'confidence':         conf_results,
+    }
 
 
 

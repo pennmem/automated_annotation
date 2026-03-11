@@ -8,6 +8,49 @@ from abc import ABC, abstractmethod
 
 STANDARD_COLUMNS = ['Word', 'Onset', 'Offset', 'Probability']
 
+# Max tokens for Whisper's initial_prompt conditioning window is ~224 tokens.
+# We budget roughly 200 words to stay safe.
+_MAX_PROMPT_WORDS = 200
+
+
+def _build_initial_prompt(context):
+    """Build an initial_prompt string from context for Whisper conditioning.
+
+    Puts file-specific list words first (highest priority), then session-wide
+    list words, then remaining wordpool words. Truncates to fit Whisper's
+    prompt window.
+    """
+    if context is None:
+        return None
+
+    words = []
+    seen = set()
+
+    # 1. File-specific list words (the exact words presented in this trial)
+    for w in sorted(context.get('file_list_words', None) or []):
+        if w not in seen:
+            words.append(w)
+            seen.add(w)
+
+    # 2. Session-wide list words (all presented words across trials)
+    for w in sorted(context.get('list_words', None) or []):
+        if w not in seen:
+            words.append(w)
+            seen.add(w)
+
+    # 3. Remaining wordpool words
+    for w in sorted(context.get('wordpool', None) or []):
+        if w not in seen:
+            words.append(w)
+            seen.add(w)
+
+    if not words:
+        return None
+
+    # Truncate and join as comma-separated list
+    words = words[:_MAX_PROMPT_WORDS]
+    return ", ".join(words)
+
 
 def _parse_device(device_str):
     """Parse a device string like 'cuda:2' into ('cuda', 2) for ctranslate2/whisperx.
@@ -26,13 +69,20 @@ class TranscriptionBackend(ABC):
     output_subdir: str = None
 
     @abstractmethod
-    def load_model(self, use_gpu, smokescreen, args, device=None):
+    def load_model(self, smokescreen, args, **kwargs):
         """Load model/resources. Called once before processing files."""
         pass
 
     @abstractmethod
-    def transcribe_file(self, filepath, smokescreen, args):
+    def transcribe_file(self, filepath, smokescreen, args, context=None):
         """Transcribe a single audio file.
+
+        Args:
+            filepath: Path to the .wav file.
+            smokescreen: If True, truncate audio for fast testing.
+            args: Dict with backend-specific arguments.
+            context: Optional dict from build_context() with wordpool,
+                     list_words, and file_list_words for biasing transcription.
 
         Returns:
             pd.DataFrame with columns: Word, Onset, Offset, Probability
@@ -53,7 +103,7 @@ class WhisperBackend(TranscriptionBackend):
         self.model = None
         self.batch_size = 16
 
-    def load_model(self, use_gpu, smokescreen, args, device=None):
+    def load_model(self, smokescreen, args, use_gpu=False, device=None, model_size=None, **kwargs):
         import torch
         import whisperx
 
@@ -64,7 +114,8 @@ class WhisperBackend(TranscriptionBackend):
                 device = "cpu"
         dev, dev_idx = _parse_device(device)
         print(f"WhisperBackend: device={dev}, device_index={dev_idx}")
-        model_size = "large-v2" if not smokescreen else 'tiny.en'
+        if model_size is None:
+            model_size = "large-v2" if not smokescreen else 'tiny.en'
         try:
             compute_type = "float16" if dev == "cuda" else "int8"
             self.model = whisperx.load_model(model_size, dev, device_index=dev_idx, compute_type=compute_type, language="en")
@@ -75,7 +126,7 @@ class WhisperBackend(TranscriptionBackend):
             self.model = whisperx.load_model(model_size, dev, compute_type="int8", language="en")
         self.device = dev
 
-    def transcribe_file(self, filepath, smokescreen, args):
+    def transcribe_file(self, filepath, smokescreen, args, context=None):
         import whisperx
 
         audio = whisperx.load_audio(filepath)
@@ -83,6 +134,9 @@ class WhisperBackend(TranscriptionBackend):
             audio = audio[:len(audio) // 3]
 
         transcribe_args = args.get('transcribe', {})
+        prompt = _build_initial_prompt(context)
+        if prompt and 'initial_prompt' not in transcribe_args:
+            transcribe_args['initial_prompt'] = prompt
         result = self.model.transcribe(audio, batch_size=self.batch_size, language="en", **transcribe_args)
 
         self._last_raw_result = result
@@ -120,7 +174,7 @@ class WhisperXBackend(TranscriptionBackend):
         self.batch_size = 16
         self.whisper_dir = None
 
-    def load_model(self, use_gpu, smokescreen, args, device=None):
+    def load_model(self, smokescreen, args, use_gpu=False, device=None, model_size=None, **kwargs):
         import torch
         import whisperx
 
@@ -144,7 +198,8 @@ class WhisperXBackend(TranscriptionBackend):
         self.whisper_dir = whisper_dir
 
         if not whisper_dir:
-            model_size = "large-v2" if not smokescreen else 'tiny.en'
+            if model_size is None:
+                model_size = "large-v2" if not smokescreen else 'tiny.en'
             try:
                 compute_type = "float16" if dev == "cuda" else "int8"
                 self.model = whisperx.load_model(model_size, "cuda", device_index=0, compute_type=compute_type, language="en")
@@ -157,7 +212,7 @@ class WhisperXBackend(TranscriptionBackend):
             language_code="en", device=self.device
         )
 
-    def transcribe_file(self, filepath, smokescreen, args):
+    def transcribe_file(self, filepath, smokescreen, args, context=None):
         import whisperx
 
         audio = whisperx.load_audio(filepath)
@@ -171,6 +226,9 @@ class WhisperXBackend(TranscriptionBackend):
                 result = json.load(f)
         else:
             transcribe_args = args.get('transcribe', {})
+            prompt = _build_initial_prompt(context)
+            if prompt:
+                self.model.options.initial_prompt = prompt
             result = self.model.transcribe(audio, batch_size=self.batch_size, language="en", **transcribe_args)
 
         result = whisperx.align(
@@ -205,10 +263,10 @@ class AssemblyAIBackend(TranscriptionBackend):
     def __init__(self):
         self.transcriber = None
 
-    def load_model(self, use_gpu, smokescreen, args, device=None):
+    def load_model(self, smokescreen, args, speech_models=None, **kwargs):
         import assemblyai as aai
 
-        api_key = os.environ.get('ASSEMBLYAI_API_KEY')
+        api_key = os.environ.get('ASSEMBLY_AI_KEY')
         if not api_key:
             raise EnvironmentError(
                 "ASSEMBLYAI_API_KEY environment variable is not set. "
@@ -216,14 +274,47 @@ class AssemblyAIBackend(TranscriptionBackend):
             )
         aai.settings.api_key = api_key
 
+        if speech_models is None:
+            speech_models = ["universal-2"] if smokescreen else ["universal-2", "universal-3-pro"]
+        elif not isinstance(speech_models, list):
+            speech_models = [speech_models]
+
         config = aai.TranscriptionConfig(
+            speech_models=speech_models,
             punctuate=False,
             format_text=False,
             language_code="en",
         )
         self.transcriber = aai.Transcriber(config=config)
 
-    def transcribe_file(self, filepath, smokescreen, args):
+    def transcribe_file(self, filepath, smokescreen, args, context=None):
+        if context is not None:
+            import assemblyai as aai
+            boost_words = []
+            # File-specific list words get highest priority
+            for w in sorted(context.get('file_list_words', None) or []):
+                boost_words.append(w.capitalize())
+            # Then session-wide list words
+            for w in sorted(context.get('list_words', None) or []):
+                cap = w.capitalize()
+                if cap not in boost_words:
+                    boost_words.append(cap)
+            # Then remaining wordpool words
+            for w in sorted(context.get('wordpool', None) or []):
+                cap = w.capitalize()
+                if cap not in boost_words:
+                    boost_words.append(cap)
+            if boost_words:
+                config = aai.TranscriptionConfig(
+                    speech_models=self.transcriber.config.speech_models,
+                    punctuate=False,
+                    format_text=False,
+                    language_code="en",
+                    word_boost=boost_words,
+                    boost_param="high",
+                )
+                self.transcriber.config = config
+
         transcript = self.transcriber.transcribe(filepath)
 
         if transcript.status == "error":
