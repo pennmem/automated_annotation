@@ -112,7 +112,8 @@ def _available_gpu_devices():
 # ── Per-session worker (must be top-level for ProcessPoolExecutor pickling) ──
 
 def _annotate_worker(session_dir: str, backend_name: str, model_name: str,
-                     use_gpu: bool, device: str, force_recompute: bool) -> str:
+                     use_gpu: bool, device: str, force_recompute: bool,
+                     parse_files_dir: str = None) -> str:
     """Run in a subprocess: transcribe one session and write CSV + .ann files.
 
     Returns session_dir on success, raises on failure.
@@ -166,6 +167,17 @@ def _annotate_worker(session_dir: str, backend_name: str, model_name: str,
             csv_to_ann(dest_csv, dest_ann, model_name=model_name)
             log.info(f'  Saved ANN: {dest_ann}')
 
+            # Mirror .ann to parse_files working copy if the directory exists
+            if parse_files_dir:
+                rel = os.path.relpath(session_dir, LTP_ROOT)
+                pf_session = os.path.join(os.path.expanduser(parse_files_dir), rel)
+                if os.path.isdir(pf_session):
+                    pf_ann = os.path.join(pf_session, f'{trial_num}.ann')
+                    shutil.copy2(dest_ann, pf_ann)
+                    log.info(f'  Mirrored ANN: {pf_ann}')
+                else:
+                    log.debug(f'  parse_files dir not found, skipping mirror: {pf_session}')
+
     return session_dir
 
 
@@ -197,6 +209,11 @@ def main():
     parser.add_argument('--dry-run', action='store_true',
                         help='Print sessions that would be annotated, then exit')
     parser.add_argument('--experiments-file', default=ACTIVE_EXPERIMENTS_FILE)
+    parser.add_argument('--parse-files-dir', default="~/parse_files",
+                        help='Path to parse_files working copy root (e.g. ~/parse_files). '
+                             'When set, .ann files are also copied to '
+                             '{parse-files-dir}/{exp}/{subject}/session_{N}/. '
+                             'The session subdirectory must already exist (svn mkdir it first).')
     args = parser.parse_args()
 
     model_name  = args.model_name or args.backend
@@ -250,7 +267,8 @@ def main():
 
     # ── Dispatch ───────────────────────────────────────────────────────────
     job_args = [
-        (session_dir, args.backend, model_name, args.use_gpu, device, args.force_recompute)
+        (session_dir, args.backend, model_name, args.use_gpu, device,
+         args.force_recompute, args.parse_files_dir)
         for session_dir, device in zip(sessions, devices)
     ]
 
