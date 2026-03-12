@@ -152,7 +152,7 @@ def _annotate_worker(session_dir: str, backend_name: str, model_name: str,
         for csv_path in csv_files:
             trial_num = os.path.splitext(os.path.basename(csv_path))[0]
             dest_csv  = os.path.join(session_dir, f'{model_name}_{trial_num}.csv')
-            dest_ann  = os.path.join(session_dir, f'{model_name}_{trial_num}.ann')
+            dest_ann  = os.path.join(session_dir, f'{trial_num}.ann')
 
             try:
                 shutil.copy2(csv_path, dest_csv)
