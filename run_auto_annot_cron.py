@@ -167,16 +167,14 @@ def _annotate_worker(session_dir: str, backend_name: str, model_name: str,
             csv_to_ann(dest_csv, dest_ann, model_name=model_name)
             log.info(f'  Saved ANN: {dest_ann}')
 
-            # Mirror .ann to parse_files working copy if the directory exists
+            # Mirror .ann to parse_files working copy, creating the dir if needed
             if parse_files_dir:
                 rel = os.path.relpath(session_dir, LTP_ROOT)
                 pf_session = os.path.join(os.path.expanduser(parse_files_dir), rel)
-                if os.path.isdir(pf_session):
-                    pf_ann = os.path.join(pf_session, f'{trial_num}.ann')
-                    shutil.copy2(dest_ann, pf_ann)
-                    log.info(f'  Mirrored ANN: {pf_ann}')
-                else:
-                    log.debug(f'  parse_files dir not found, skipping mirror: {pf_session}')
+                os.makedirs(pf_session, exist_ok=True)
+                pf_ann = os.path.join(pf_session, f'{trial_num}.ann')
+                shutil.copy2(dest_ann, pf_ann)
+                log.info(f'  Mirrored ANN: {pf_ann}')
 
     return session_dir
 
