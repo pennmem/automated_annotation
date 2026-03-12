@@ -233,12 +233,16 @@ def main():
         devices = [None] * len(sessions)
 
     # ── Worker count ───────────────────────────────────────────────────────
+    # GPU workloads: default to 1 worker per GPU, capped at number of GPUs.
+    # Running multiple workers per GPU causes OOM when each loads a full model.
     if args.no_parallel:
         n_workers = 1
     elif args.workers is not None:
         n_workers = args.workers
     elif args.use_gpu:
-        n_workers = len(_available_gpu_devices()) or 1
+        n_gpus = len(_available_gpu_devices())
+        # One worker per GPU; if only 1 GPU (or none), run sequentially in-process
+        n_workers = n_gpus if n_gpus > 1 else 1
     else:
         n_workers = min(len(sessions), 4)
 
