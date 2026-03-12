@@ -10,7 +10,9 @@
       "Bash(conda info:*)",
       "Bash(python3 -c \":*)",
       "Bash(~/.conda/envs/annotate_np1/bin/python -c \":*)",
-      "Bash(python3 -:*)"
+      "Bash(python3 -:*)",
+      "Bash(/home1/zrentala/automated_annotation/remove_auto_ann.sh:*)",
+      "Bash(chmod +x /home1/zrentala/automated_annotation/remove_auto_ann.sh)"
     ]
   }
 }
