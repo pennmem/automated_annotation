@@ -91,12 +91,58 @@ class ListWordPreference(OutputRule):
         return df
 
 
+class MultiWordMerge(OutputRule):
+    """Merge consecutive ASR words that together form a multi-word pool item.
+
+    E.g. if the wordpool contains TRACING_PAPER and the transcript has
+    TRACING followed immediately by PAPER, they become a single TRACING_PAPER
+    row using the onset of the first word, offset of the last, and the minimum
+    probability across the merged words.
+
+    Must run before WordpoolFilter so the merged token is present for lookup.
+    """
+
+    def apply(self, df, context):
+        wordpool = context.get('wordpool')
+        if not wordpool:
+            return df
+        multiword = [(w.split('_'), w) for w in wordpool if '_' in w]
+        if not multiword:
+            return df
+
+        rows = df.reset_index(drop=True).to_dict('records')
+        merged = []
+        i = 0
+        while i < len(rows):
+            matched = False
+            for parts, full_word in sorted(multiword, key=lambda x: -len(x[0])):
+                n = len(parts)
+                if i + n <= len(rows):
+                    window = [str(rows[i + j]['Word']).strip().upper() for j in range(n)]
+                    if window == parts:
+                        combined = rows[i].copy()
+                        combined['Word'] = full_word
+                        combined['Offset'] = rows[i + n - 1].get('Offset', combined.get('Offset'))
+                        probs = [rows[i + j].get('Probability') for j in range(n)]
+                        probs = [p for p in probs if p is not None and not pd.isna(p)]
+                        combined['Probability'] = min(probs) if probs else float('nan')
+                        merged.append(combined)
+                        i += n
+                        matched = True
+                        break
+            if not matched:
+                merged.append(rows[i])
+                i += 1
+
+        return pd.DataFrame(merged) if merged else df.iloc[0:0].copy()
+
+
 class WordpoolFilter(OutputRule):
     """Classify words relative to the wordpool.
 
     Per annotation rules:
     - Words in wordpool -> correct recall (keep as-is)
-    - Words NOT in wordpool but identifiable -> intrusion (keep the word)
+    - Words NOT in wordpool -> vocalization ('<>')
     - Very low confidence words -> vocalization ('<>')
 
     Low-confidence threshold can be tuned; defaults to 0.1.
@@ -110,8 +156,10 @@ class WordpoolFilter(OutputRule):
             return df
         df = df.copy()
         df['Word'] = df.apply(
-            lambda row: '<>' if row['Probability'] < self.VOCALIZATION_THRESHOLD
-            else row['Word'],
+            lambda row: '<>'
+            if (row['Probability'] < self.VOCALIZATION_THRESHOLD
+                or str(row['Word']).strip().upper() not in wordpool)
+            else str(row['Word']).strip().upper(),
             axis=1,
         )
         return df
@@ -170,6 +218,7 @@ class OnsetAdjust(OutputRule):
 OUTPUT_RULE_REGISTRY = {
     'plural_normalization': PluralNormalization,
     'list_word_preference': ListWordPreference,
+    'multi_word_merge': MultiWordMerge,
     'wordpool_filter': WordpoolFilter,
     'long_duration_vocalization': LongDurationVocalization,
     'onset_adjust': OnsetAdjust,

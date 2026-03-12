@@ -112,8 +112,7 @@ def _available_gpu_devices():
 # ── Per-session worker (must be top-level for ProcessPoolExecutor pickling) ──
 
 def _annotate_worker(session_dir: str, backend_name: str, model_name: str,
-                     use_gpu: bool, device: str, force_recompute: bool,
-                     parse_files_dir: str = None) -> str:
+                     use_gpu: bool, device: str, force_recompute: bool) -> str:
     """Run in a subprocess: transcribe one session and write CSV + .ann files.
 
     Returns session_dir on success, raises on failure.
@@ -133,6 +132,22 @@ def _annotate_worker(session_dir: str, backend_name: str, model_name: str,
         if os.path.basename(f)[0].isdigit()
     )
     log.info(f'[{device or "cpu"}] Annotating {len(wav_files)} trial(s) in {session_dir}')
+
+    # Load wordpool for item-number lookup and multi-word merging
+    wordpool = None
+    try:
+        # session_dir = /data/eeg/scalp/ltp/{exp}/{subj}/session_{N}
+        rel_parts  = os.path.relpath(session_dir, LTP_ROOT).split(os.sep)
+        subj_dir   = os.path.join(LTP_ROOT, rel_parts[0], rel_parts[1])
+        wp_matches = sorted(glob.glob(os.path.join(subj_dir, '*wordpool*.txt')))
+        if wp_matches:
+            with open(wp_matches[0]) as _f:
+                wordpool = [ln.strip().upper() for ln in _f if ln.strip()]
+            log.info(f'  Loaded wordpool ({len(wordpool)} words): {wp_matches[0]}')
+        else:
+            log.debug(f'  No wordpool found in {subj_dir}')
+    except Exception as _e:
+        log.warning(f'  Could not load wordpool: {_e}')
 
     with tempfile.TemporaryDirectory() as tmp:
         run_transcription(
@@ -164,17 +179,17 @@ def _annotate_worker(session_dir: str, backend_name: str, model_name: str,
                 )
 
             log.info(f'  Saved CSV: {dest_csv}')
-            csv_to_ann(dest_csv, dest_ann, model_name=model_name)
+            csv_to_ann(dest_csv, dest_ann, model_name=model_name, wordpool=wordpool)
             log.info(f'  Saved ANN: {dest_ann}')
 
             # Mirror .ann to parse_files working copy, creating the dir if needed
-            if parse_files_dir:
-                rel = os.path.relpath(session_dir, LTP_ROOT)
-                pf_session = os.path.join(os.path.expanduser(parse_files_dir), rel)
-                os.makedirs(pf_session, exist_ok=True)
-                pf_ann = os.path.join(pf_session, f'{trial_num}.ann')
-                shutil.copy2(dest_ann, pf_ann)
-                log.info(f'  Mirrored ANN: {pf_ann}')
+            # if parse_files_dir:
+            #     rel = os.path.relpath(session_dir, LTP_ROOT)
+            #     pf_session = os.path.join(os.path.expanduser(parse_files_dir), rel)
+            #     os.makedirs(pf_session, exist_ok=True)
+            #     pf_ann = os.path.join(pf_session, f'{trial_num}.ann')
+            #     shutil.copy2(dest_ann, pf_ann)
+            #     log.info(f'  Mirrored ANN: {pf_ann}')
 
     return session_dir
 
@@ -207,11 +222,11 @@ def main():
     parser.add_argument('--dry-run', action='store_true',
                         help='Print sessions that would be annotated, then exit')
     parser.add_argument('--experiments-file', default=ACTIVE_EXPERIMENTS_FILE)
-    parser.add_argument('--parse-files-dir', default="~/parse_files",
-                        help='Path to parse_files working copy root (e.g. ~/parse_files). '
-                             'When set, .ann files are also copied to '
-                             '{parse-files-dir}/{exp}/{subject}/session_{N}/. '
-                             'The session subdirectory must already exist (svn mkdir it first).')
+    # parser.add_argument('--parse-files-dir', default="~/parse_files",
+    #                     help='Path to parse_files working copy root (e.g. ~/parse_files). '
+    #                          'When set, .ann files are also copied to '
+    #                          '{parse-files-dir}/{exp}/{subject}/session_{N}/. '
+    #                          'The session subdirectory must already exist (svn mkdir it first).')
     args = parser.parse_args()
 
     model_name  = args.model_name or args.backend
@@ -266,7 +281,7 @@ def main():
     # ── Dispatch ───────────────────────────────────────────────────────────
     job_args = [
         (session_dir, args.backend, model_name, args.use_gpu, device,
-         args.force_recompute, args.parse_files_dir)
+         args.force_recompute)
         for session_dir, device in zip(sessions, devices)
     ]
 
