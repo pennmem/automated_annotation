@@ -25,6 +25,7 @@ import shutil
 import logging
 import argparse
 import tempfile
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -256,7 +257,8 @@ def main():
             except Exception:
                 logger.exception(f'Failed to annotate {jargs[0]}')
     else:
-        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        mp_ctx = multiprocessing.get_context('spawn')
+        with ProcessPoolExecutor(max_workers=n_workers, mp_context=mp_ctx) as pool:
             futures = {pool.submit(_annotate_worker, *jargs): jargs[0] for jargs in job_args}
             for future in as_completed(futures):
                 session_dir = futures[future]
