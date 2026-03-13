@@ -34,17 +34,17 @@ def _load_wordpool(wordpool_path: str):
         return [line.strip().upper() for line in f if line.strip()]
 
 
-def _add_index(df, wordpool):
-    if not wordpool:
-        return df
-    df = df.copy()
-    w_indices = {}
-    for i, w in enumerate(wordpool):
-        key = w.upper()
-        if key not in w_indices:
-            w_indices[key] = i + 1
-    df['item_num'] = df['Word'].str.upper().map(w_indices)
-    return df
+# def _add_index(df, wordpool):
+#     if not wordpool:
+#         return df
+#     df = df.copy()
+#     w_indices = {}
+#     for i, w in enumerate(wordpool):
+#         key = w.upper()
+#         if key not in w_indices:
+#             w_indices[key] = i + 1
+#     df['item_num'] = df['Word'].str.upper().map(w_indices)
+#     return df
 
 def csv_to_ann(csv_path: str, ann_path: str, model_name: str = 'automated',
                wordpool: list = None) -> None:

@@ -112,7 +112,8 @@ def _available_gpu_devices():
 # ── Per-session worker (must be top-level for ProcessPoolExecutor pickling) ──
 
 def _annotate_worker(session_dir: str, backend_name: str, model_name: str,
-                     use_gpu: bool, device: str, force_recompute: bool) -> str:
+                     use_gpu: bool, device: str, force_recompute: bool,
+                     rules: list = None) -> str:
     """Run in a subprocess: transcribe one session and write CSV + .ann files.
 
     Returns session_dir on success, raises on failure.
@@ -150,9 +151,14 @@ def _annotate_worker(session_dir: str, backend_name: str, model_name: str,
         log.warning(f'  Could not load wordpool: {_e}')
 
     with tempfile.TemporaryDirectory() as tmp:
+        extra_args = {}
+        if rules:
+            extra_args['rules'] = rules
+
         run_transcription(
             session_dir, tmp,
             backend_name=backend_name,
+            args=extra_args,
             use_gpu=use_gpu,
             device=device,
             force_recompute=force_recompute,
@@ -219,6 +225,8 @@ def main():
     parser.add_argument('--no-parallel', action='store_true',
                         help='Disable parallelism and run sessions sequentially.')
     parser.add_argument('--force-recompute', action='store_true')
+    parser.add_argument('--rules', nargs='*', default=None,
+                        help='Output rules to apply, e.g. Normalization MultiWordMerge WordpoolFilter')
     parser.add_argument('--dry-run', action='store_true',
                         help='Print sessions that would be annotated, then exit')
     parser.add_argument('--experiments-file', default=ACTIVE_EXPERIMENTS_FILE)
@@ -281,7 +289,7 @@ def main():
     # ── Dispatch ───────────────────────────────────────────────────────────
     job_args = [
         (session_dir, args.backend, model_name, args.use_gpu, device,
-         args.force_recompute)
+         args.force_recompute, args.rules)
         for session_dir, device in zip(sessions, devices)
     ]
 
