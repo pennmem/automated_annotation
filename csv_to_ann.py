@@ -34,47 +34,17 @@ def _load_wordpool(wordpool_path: str):
         return [line.strip().upper() for line in f if line.strip()]
 
 
-def _merge_multiword(df: pd.DataFrame, wp_words: list) -> pd.DataFrame:
-    """Merge consecutive ASR words that together form a multi-word pool item.
-
-    E.g. if wordpool has TRACING_PAPER and the CSV has TRACING then PAPER
-    back-to-back, they become a single TRACING_PAPER row using the onset of
-    TRACING and the offset of PAPER.
-    """
-    multiword = [
-        (w.split('_'), w)
-        for w in wp_words if '_' in w
-    ]
-    if not multiword:
+def _add_index(df, wordpool):
+    if not wordpool:
         return df
-
-    rows = df.to_dict('records')
-    merged = []
-    i = 0
-    while i < len(rows):
-        matched = False
-        # Try longest items first to avoid partial matches
-        for parts, full_word in sorted(multiword, key=lambda x: -len(x[0])):
-            n = len(parts)
-            if i + n <= len(rows):
-                window = [str(rows[i + j]['Word']).strip().upper() for j in range(n)]
-                if window == parts:
-                    combined = rows[i].copy()
-                    combined['Word'] = full_word
-                    combined['Offset'] = rows[i + n - 1].get('Offset', combined.get('Offset'))
-                    probs = [rows[i + j].get('Probability') for j in range(n)]
-                    probs = [p for p in probs if p is not None and not (isinstance(p, float) and pd.isna(p))]
-                    combined['Probability'] = min(probs) if probs else float('nan')
-                    merged.append(combined)
-                    i += n
-                    matched = True
-                    break
-        if not matched:
-            merged.append(rows[i])
-            i += 1
-
-    return pd.DataFrame(merged) if merged else df.iloc[0:0].copy()
-
+    df = df.copy()
+    w_indices = {}
+    for i, w in enumerate(wordpool):
+        key = w.upper()
+        if key not in w_indices:
+            w_indices[key] = i + 1
+    df['item_num'] = df['Word'].str.upper().map(w_indices)
+    return df
 
 def csv_to_ann(csv_path: str, ann_path: str, model_name: str = 'automated',
                wordpool: list = None) -> None:
@@ -93,14 +63,6 @@ def csv_to_ann(csv_path: str, ann_path: str, model_name: str = 'automated',
     # Drop rows without a valid onset (e.g. Whisper-only backend)
     df = df.dropna(subset=['Onset']).reset_index(drop=True)
 
-    if wordpool:
-        # Merge consecutive words into multi-word pool items first
-        df = _merge_multiword(df, wordpool)
-        # Build 1-based index lookup (underscored form is canonical in pool)
-        wp_index = {w: i + 1 for i, w in enumerate(wordpool)}
-    else:
-        wp_index = {}
-
     now_unix = int(time.time())
     now_str  = datetime.now(timezone.utc).strftime('%B %d, %Y\t%I:%M:%S %p UTC')
 
@@ -113,13 +75,15 @@ def csv_to_ann(csv_path: str, ann_path: str, model_name: str = 'automated',
         '',   # blank line terminates the header — do not remove
     ]
 
+    df = _add_index(df, wordpool)
+
     data_lines = []
     for _, row in df.iterrows():
         onset = float(row['Onset'])
         word  = str(row['Word']).strip().upper()
         if word.lower() in ('nan', ''):
             continue
-        item_num = wp_index.get(word, 0)
+        item_num = int(row['item_num']) if pd.notna(row.get('item_num')) else 0
         data_lines.append(f'{onset}\t{item_num}\t{word}')
 
     os.makedirs(os.path.dirname(os.path.abspath(ann_path)), exist_ok=True)

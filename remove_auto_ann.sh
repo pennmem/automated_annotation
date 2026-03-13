@@ -35,7 +35,7 @@ done
 # Commit all deletions in one pass
 if svn status "$PARSE_FILES_DIR" | grep -q '^D'; then
     echo "Committing SVN deletions in $PARSE_FILES_DIR ..."
-    # svn commit "$PARSE_FILES_DIR" -m "Remove auto-generated .ann files (whisperx* present)"
+    svn commit "$PARSE_FILES_DIR" -m "Remove auto-generated .ann files (whisperx* present)"
     echo "SVN commit done."
 else
     echo "No SVN deletions to commit."

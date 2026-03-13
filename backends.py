@@ -13,12 +13,17 @@ STANDARD_COLUMNS = ['Word', 'Onset', 'Offset', 'Probability']
 _MAX_PROMPT_WORDS = 200
 
 
-def _build_initial_prompt(context):
+def _build_initial_prompt(context, style='wordlist'):
     """Build an initial_prompt string from context for Whisper conditioning.
 
-    Puts file-specific list words first (highest priority), then session-wide
-    list words, then remaining wordpool words. Truncates to fit Whisper's
-    prompt window.
+    Args:
+        context: dict with wordpool, list_words, file_list_words keys.
+        style: Prompt style to use.
+            'wordlist' (default) - comma-separated word list only.
+            'descriptive' - task description + prioritized word list.
+
+    Returns:
+        Prompt string or None.
     """
     if context is None:
         return None
@@ -27,7 +32,8 @@ def _build_initial_prompt(context):
     seen = set()
 
     # 1. File-specific list words (the exact words presented in this trial)
-    for w in sorted(context.get('file_list_words', None) or []):
+    file_list = sorted(context.get('file_list_words', None) or [])
+    for w in file_list:
         if w not in seen:
             words.append(w)
             seen.add(w)
@@ -47,7 +53,22 @@ def _build_initial_prompt(context):
     if not words:
         return None
 
-    # Truncate and join as comma-separated list
+    if style == 'descriptive':
+        # Prioritize current trial's list words in the budget
+        list_str = ", ".join(file_list) if file_list else ", ".join(words[:15])
+        remaining = [w for w in words if w not in set(file_list)][:_MAX_PROMPT_WORDS - 30]
+        preamble = (
+            "This is a free-recall memory experiment. The participant studied a list "
+            "of words and is now recalling them aloud in any order. Most recalled items "
+            "are single words, but some are 2 to 4 words long. Full sentences indicate "
+            "the participant is not recalling a studied word. Prioritize words from the "
+            "current study list. "
+            f"Current list: {list_str}. "
+            f"Other possible words: {', '.join(remaining)}."
+        )
+        return preamble
+
+    # Default: wordlist style
     words = words[:_MAX_PROMPT_WORDS]
     return ", ".join(words)
 
@@ -134,7 +155,8 @@ class WhisperBackend(TranscriptionBackend):
             audio = audio[:len(audio) // 3]
 
         transcribe_args = args.get('transcribe', {})
-        prompt = _build_initial_prompt(context)
+        prompt_style = args.get('prompt_style', 'wordlist')
+        prompt = _build_initial_prompt(context, style=prompt_style)
         if prompt and 'initial_prompt' not in transcribe_args:
             transcribe_args['initial_prompt'] = prompt
         result = self.model.transcribe(audio, batch_size=self.batch_size, language="en", **transcribe_args)
@@ -226,7 +248,8 @@ class WhisperXBackend(TranscriptionBackend):
                 result = json.load(f)
         else:
             transcribe_args = args.get('transcribe', {})
-            prompt = _build_initial_prompt(context)
+            prompt_style = args.get('prompt_style', 'wordlist')
+            prompt = _build_initial_prompt(context, style=prompt_style)
             if prompt:
                 self.model.options.initial_prompt = prompt
             result = self.model.transcribe(audio, batch_size=self.batch_size, language="en", **transcribe_args)
@@ -311,7 +334,7 @@ class AssemblyAIBackend(TranscriptionBackend):
                     format_text=False,
                     language_code="en",
                     word_boost=boost_words,
-                    boost_param="high",
+                    boost_param="default",
                 )
                 self.transcriber.config = config
 

@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Read(//data10/eeg/scalp/ltp/ltpFR2/**)",
-      "Bash(find /home1/zrentala/automated_annotation -name *.ann)",
-      "Read(//data1/eeg/scalp/ltp/**)"
-    ]
-  }
-}

@@ -22,11 +22,37 @@ class OutputRule(ABC):
         pass
 
 
-class PluralNormalization(OutputRule):
-    """Normalize plurals and common suffixed forms to their wordpool base.
+def _load_word2vec(model_name='glove-wiki-gigaword-50'):
+    """Lazy-load a gensim KeyedVectors model (cached after first call)."""
+    if not hasattr(_load_word2vec, '_model'):
+        import gensim.downloader as api
+        _load_word2vec._model = api.load(model_name)
+    return _load_word2vec._model
 
-    Per annotation rules: ignore plurals and score as the singular version.
-    Also handles longer words containing the target (e.g. 'telephone' -> 'phone').
+
+def _semantic_similarity(word_a, word_b, threshold=0.5):
+    """Return True if word_a and word_b are semantically similar via word2vec."""
+    model = _load_word2vec()
+    a = word_a.lower().replace('_', ' ').split()
+    b = word_b.lower().replace('_', ' ').split()
+    # Use only tokens present in the model vocabulary
+    a = [t for t in a if t in model]
+    b = [t for t in b if t in model]
+    if not a or not b:
+        return False
+    try:
+        return model.n_similarity(a, b) >= threshold
+    except (KeyError, ZeroDivisionError):
+        return False
+
+
+class Normalization(OutputRule):
+    """Normalize words to their wordpool form using suffix rules and semantic similarity.
+
+    Handles plurals, common suffixes, and substring matches, but only accepts
+    a candidate if it is semantically similar (via word2vec) to the original word.
+    Exact suffix matches (plural -S, -ES, -ED) are accepted without a similarity
+    check since they are morphological variants of the same word.
     """
 
     def apply(self, df, context):
@@ -43,29 +69,25 @@ class PluralNormalization(OutputRule):
         if upper in wordpool:
             return upper
 
-        # Strip trailing 's' for plurals (e.g. DOGS -> DOG)
-        if upper.endswith('S') and upper[:-1] in wordpool:
-            return upper[:-1]
+        # Morphological suffix stripping (no similarity check needed)
+        for suffix, strip_len in [('S', 1), ('ES', 2), ('ED', 2)]:
+            if upper.endswith(suffix) and upper[:-strip_len] in wordpool:
+                return upper[:-strip_len]
 
-        # Strip 'es' suffix (e.g. FOXES -> FOX)
-        if upper.endswith('ES') and upper[:-2] in wordpool:
-            return upper[:-2]
-
-        # Strip 'ed' suffix (e.g. PARKED -> PARK)
-        if upper.endswith('ED') and upper[:-2] in wordpool:
-            return upper[:-2]
-
-        # Check if any wordpool word is contained in this word
-        # (e.g. TELEPHONE contains PHONE). Pick the longest match.
+        # Substring containment: accept only if semantically similar
         best = None
         for wp_word in wordpool:
             if wp_word in upper and len(wp_word) >= 3:
                 if best is None or len(wp_word) > len(best):
                     best = wp_word
-        if best is not None:
+        if best is not None and _semantic_similarity(upper, best):
             return best
 
         return upper
+
+
+# Keep old name as alias for backwards compatibility
+PluralNormalization = Normalization
 
 
 class ListWordPreference(OutputRule):
@@ -104,9 +126,12 @@ class MultiWordMerge(OutputRule):
 
     def apply(self, df, context):
         wordpool = context.get('wordpool')
+        # print(any(w == 'DRYER_MACHINE' for w in wordpool))
         if not wordpool:
             return df
-        multiword = [(w.split('_'), w) for w in wordpool if '_' in w]
+        multiword = [(w.replace('_', ' ').split(), w) for w in wordpool if '_' in w or ' ' in w]
+        # print(any(w == 'DRYER_MACHINE' for _, w in multiword))
+
         if not multiword:
             return df
 
@@ -116,10 +141,14 @@ class MultiWordMerge(OutputRule):
         while i < len(rows):
             matched = False
             for parts, full_word in sorted(multiword, key=lambda x: -len(x[0])):
+                # print(parts)
+                # print(full_word)
                 n = len(parts)
                 if i + n <= len(rows):
                     window = [str(rows[i + j]['Word']).strip().upper() for j in range(n)]
+                    # print(window)
                     if window == parts:
+                        print(window)
                         combined = rows[i].copy()
                         combined['Word'] = full_word
                         combined['Offset'] = rows[i + n - 1].get('Offset', combined.get('Offset'))
@@ -214,14 +243,31 @@ class OnsetAdjust(OutputRule):
             )
         return df
 
+# class WordpoolIndex(OutputRule):
+#     """Add a wordpool index column mapping each word to its position in the wordpool."""
+
+#     def apply(self, df, context):
+#         wordpool = context.get('wordpool')
+#         if not wordpool:
+#             return df
+#         df = df.copy()
+#         w_indices = {}
+#         for i, w in enumerate(wordpool):
+#             key = w.upper()
+#             if key not in w_indices:
+#                 w_indices[key] = i + 1
+#         df['item_num'] = df['Word'].str.upper().map(w_indices)
+#         return df
+
+
 
 OUTPUT_RULE_REGISTRY = {
-    'plural_normalization': PluralNormalization,
-    'list_word_preference': ListWordPreference,
-    'multi_word_merge': MultiWordMerge,
-    'wordpool_filter': WordpoolFilter,
-    'long_duration_vocalization': LongDurationVocalization,
-    'onset_adjust': OnsetAdjust,
+    ('Normalization', Normalization()),
+    ('MultiWordMerge', MultiWordMerge()),
+    ('ListWordPreference', ListWordPreference()),
+    ('WordpoolFilter', WordpoolFilter()),
+    ('LongDurationVocalization', LongDurationVocalization()),
+    ('OnsetAdjust', OnsetAdjust()),
 }
 
 
@@ -306,7 +352,7 @@ def build_context(in_dir, args=None):
 
     if wordpool_path and os.path.exists(wordpool_path):
         with open(wordpool_path) as f:
-            context['wordpool'] = {line.strip().upper() for line in f if line.strip()}
+            context['wordpool'] = [line.strip().upper() for line in f if line.strip()]
 
     # Load .lst files from session directory (presented items)
     list_words = set()
@@ -323,7 +369,8 @@ def build_context(in_dir, args=None):
     # Merge list words into wordpool so they always pass filtering
     if list_words:
         if context['wordpool'] is None:
-            context['wordpool'] = set()
-        context['wordpool'] |= list_words
+            context['wordpool'] = []
+        existing = set(context['wordpool'])
+        context['wordpool'].extend(w for w in list_words if w not in existing)
 
     return context
