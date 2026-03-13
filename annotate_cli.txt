@@ -1,1 +1,1 @@
-LD_LIBRARY_PATH=/home1/zrentala/.conda/envs/annotate_np1/lib:$LD_LIBRARY_PATH /home1/zrentala/.conda/envs/annotate_np1/bin/python run_auto_annot_cron.py --backend whisperx --use-gpu --rules Normalization MultiWordMerge ListWordPreference WordpoolFilter OnsetAdjust WordpoolIndex
+LD_LIBRARY_PATH=/home1/zrentala/.conda/envs/annotate_np1/lib:$LD_LIBRARY_PATH /home1/zrentala/.conda/envs/annotate_np1/bin/python run_auto_annot_cron.py --backend whisperx --use-gpu --no-parallel --rules Normalization MultiWordMerge ListWordPreference WordpoolFilter OnsetAdjust WordpoolIndex

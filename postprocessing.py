@@ -254,7 +254,7 @@ class WordpoolIndex(OutputRule):
             key = w.upper()
             if key not in w_indices:
                 w_indices[key] = i + 1
-        df['item_num'] = df['Word'].str.upper().map(w_indices).astype('Int64')
+        df['item_num'] = df['Word'].str.upper().map(w_indices).fillna(-1).astype(int)
         return df
 
 
