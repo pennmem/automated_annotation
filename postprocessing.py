@@ -171,7 +171,6 @@ class WordpoolFilter(OutputRule):
 
     Per annotation rules:
     - Words in wordpool -> correct recall (keep as-is)
-    - Words NOT in wordpool -> vocalization ('<>')
     - Very low confidence words -> vocalization ('<>')
 
     Low-confidence threshold can be tuned; defaults to 0.1.
@@ -186,8 +185,7 @@ class WordpoolFilter(OutputRule):
         df = df.copy()
         df['Word'] = df.apply(
             lambda row: '<>'
-            if (row['Probability'] < self.VOCALIZATION_THRESHOLD
-                or str(row['Word']).strip().upper() not in wordpool)
+            if (row['Probability'] < self.VOCALIZATION_THRESHOLD)
             else str(row['Word']).strip().upper(),
             axis=1,
         )
@@ -243,31 +241,32 @@ class OnsetAdjust(OutputRule):
             )
         return df
 
-# class WordpoolIndex(OutputRule):
-#     """Add a wordpool index column mapping each word to its position in the wordpool."""
+class WordpoolIndex(OutputRule):
+    """Add a wordpool index column mapping each word to its position in the wordpool."""
 
-#     def apply(self, df, context):
-#         wordpool = context.get('wordpool')
-#         if not wordpool:
-#             return df
-#         df = df.copy()
-#         w_indices = {}
-#         for i, w in enumerate(wordpool):
-#             key = w.upper()
-#             if key not in w_indices:
-#                 w_indices[key] = i + 1
-#         df['item_num'] = df['Word'].str.upper().map(w_indices)
-#         return df
+    def apply(self, df, context):
+        wordpool = context.get('wordpool')
+        if not wordpool:
+            return df
+        df = df.copy()
+        w_indices = {}
+        for i, w in enumerate(wordpool):
+            key = w.upper()
+            if key not in w_indices:
+                w_indices[key] = i + 1
+        df['item_num'] = df['Word'].str.upper().map(w_indices).astype('Int64')
+        return df
 
 
 
 OUTPUT_RULE_REGISTRY = {
-    ('Normalization', Normalization()),
-    ('MultiWordMerge', MultiWordMerge()),
-    ('ListWordPreference', ListWordPreference()),
-    ('WordpoolFilter', WordpoolFilter()),
-    ('LongDurationVocalization', LongDurationVocalization()),
-    ('OnsetAdjust', OnsetAdjust()),
+    'Normalization': Normalization,
+    'MultiWordMerge': MultiWordMerge,
+    'ListWordPreference': ListWordPreference,
+    'WordpoolFilter': WordpoolFilter,
+    'OnsetAdjust': OnsetAdjust,
+    'LongDurationVocalization': LongDurationVocalization,
+    'WordpoolIndex': WordpoolIndex,
 }
 
 

@@ -130,6 +130,7 @@ def run_transcription(in_dir, out_dir, backend_name, args=dict(),
 
             df = backend.transcribe_file(filepath, smokescreen=smokescreen, args=args, context=context)
             df = apply_output_rules(df, output_rules, context)
+            print(df)
             df.to_csv(savepath, index=False)
 
             backend.save_raw_output(out_dir, base_name)
@@ -180,6 +181,8 @@ if __name__ == "__main__":
                         help='Flag for smokescreen runs for fast testing.')
     parser.add_argument('--force_recompute', action='store_true', default=False,
                         help='Whether to force result recomputation.')
+    parser.add_argument('--rules', nargs='*', default=None,
+                        help='Output rules to apply, e.g. Normalization MultiWordMerge WordpoolFilter')
     args = parser.parse_args()
 
     if not os.path.exists(args.input_dir):
@@ -199,7 +202,12 @@ if __name__ == "__main__":
         warnings.warn("--whisper_only is deprecated. Use --backend whisper instead.", DeprecationWarning)
         backend = 'whisper'
 
+    extra_args = {}
+    if args.rules is not None:
+        extra_args['rules'] = args.rules
+
     run_transcription(args.input_dir, args.output_dir, backend,
+                      args=extra_args,
                       use_gpu=args.use_gpu, device=args.device,
                       smokescreen=args.smokescreen,
                       force_recompute=args.force_recompute, verbose=True)
