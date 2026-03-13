@@ -75,7 +75,7 @@ def csv_to_ann(csv_path: str, ann_path: str, model_name: str = 'automated',
         '',   # blank line terminates the header — do not remove
     ]
 
-    df = _add_index(df, wordpool)
+    # df = _add_index(df, wordpool)
 
     data_lines = []
     for _, row in df.iterrows():
