@@ -85,6 +85,10 @@ def word_error_rate(gt, sessnum, pred, verbose):
     out_pred_onset = []
     out_gt_onset = []
     out_pred_probability = []
+    out_trial_nums = []
+
+    # per-trial data for ROC analysis
+    trial_roc_data = []
 
     for csvfile in os.listdir(pred):
         if csvfile.endswith(".csv"):
@@ -106,6 +110,17 @@ def word_error_rate(gt, sessnum, pred, verbose):
             #rec_evs = gt.query('type == "REC_WORD" and session == sessnum and trial == trialNum')
             gtwords = list(rec_evs["item_name"])
             gtOnsets = list(rec_evs["rectime"])
+
+            # collect per-trial data for ROC
+            gt_word_set = set(w.upper() for w in gtwords if w != 'VV')
+            pred_word_list = list(df['Word'].astype(str).str.upper())
+            pred_prob_list = list(df['Probability'])
+            trial_roc_data.append({
+                'gt_words': gt_word_set,
+                'pred_words': pred_word_list,
+                'pred_probs': pred_prob_list,
+                'trial': trialNum,
+            })
 
 
             '''
@@ -156,6 +171,8 @@ def word_error_rate(gt, sessnum, pred, verbose):
             matched_words_onsetdiff = []
             matched_words_probability = []
             matched_words_gtonset = []
+            matched_words_predonset = []
+            matched_words_trial = []
 
             # mismatched words
             mismatched_words = []
@@ -167,7 +184,7 @@ def word_error_rate(gt, sessnum, pred, verbose):
                 if word != 'VV':
                     minonset, idx = get_closest_time(df.Onset.astype(int), int(onset))
                     if abs(minonset - int(onset)) < DIFF_THRESHOLD:
-                        correct.append(df.Word[idx])
+                        correct.append(str(df.Word[idx]))
                         pred_onsets.append(minonset)
 
                         # calculate the difference and append
@@ -178,15 +195,17 @@ def word_error_rate(gt, sessnum, pred, verbose):
                         out_gt_onset.append(int(onset))
                         out_pred_onset.append(minonset)
                         out_pred_probability.append(df.Probability[idx])
+                        out_trial_nums.append(trialNum)
 
                         if word == df.Word[idx]:
                             matched_words.append(df.Word[idx]); matched_words_onsetdiff.append(minonset - int(onset))
                             matched_words_probability.append(df.Probability[idx]); matched_words_gtonset.append(int(onset))
+                            matched_words_predonset.append(minonset); matched_words_trial.append(trialNum)
                         else:
                             mismatched_words.append(df.Word[idx]); mismatched_words_onsetdiff.append(minonset - int(onset))
                             mismatched_words_probability.append(df.Probability[idx]); mismatched_words_gtonset.append(int(onset))
 
-            matched_data = (matched_words, matched_words_onsetdiff, matched_words_probability, matched_words_gtonset)
+            matched_data = (matched_words, matched_words_onsetdiff, matched_words_probability, matched_words_gtonset, matched_words_predonset, matched_words_trial)
             mismatched_data = (mismatched_words, mismatched_words_onsetdiff, mismatched_words_probability, mismatched_words_gtonset)
                     
 
@@ -223,8 +242,8 @@ def word_error_rate(gt, sessnum, pred, verbose):
 
     # return outputs
     # sanity check
-    assert len(onset_diffs) == len(correctly_annotated_words) == len(out_pred_onset) == len(out_gt_onset) == len(out_pred_probability)
-    return wers, np.array(onset_diffs), correctly_annotated_words, out_pred_onset, out_pred_probability, out_gt_onset, matched_data, mismatched_data
+    assert len(onset_diffs) == len(correctly_annotated_words) == len(out_pred_onset) == len(out_gt_onset) == len(out_pred_probability) == len(out_trial_nums)
+    return wers, np.array(onset_diffs), correctly_annotated_words, out_pred_onset, out_pred_probability, out_gt_onset, matched_data, mismatched_data, out_trial_nums, trial_roc_data
 
 
 
@@ -244,11 +263,23 @@ def run_phoneme_analysis(df, verbose=False):
     return result
 
 def run_recall_time_analysis(df, verbose=False):
-    # 75 seconds recall time
-    assert df['RecallTime'].max() <= 75000
+    # Drop rows with missing RecallTime
+    n_before = len(df)
+    df = df.dropna(subset=['RecallTime']).copy()
+    n_dropped = n_before - len(df)
+    if n_dropped > 0:
+        print(f"Warning: dropped {n_dropped}/{n_before} rows with NaN RecallTime")
+
+    if len(df) == 0:
+        print("Warning: no valid RecallTime values, skipping recall time analysis")
+        return pd.DataFrame(columns=['mean', 'std', 'count'])
+
+    # Determine recall duration from data, rounded up to nearest 5s
+    max_recall = df['RecallTime'].max()
+    recall_duration = int(np.ceil(max_recall / 5000) * 5000)
 
     # 5000 ms step
-    bins = list(range(0, 75001, 5000))
+    bins = list(range(0, recall_duration + 1, 5000))
 
     # Create a new column 'RecallTime_bins' based on the bins
     df['RecallTime_bins'] = pd.cut(df['RecallTime'], bins, right=False)
@@ -275,6 +306,198 @@ def run_confidence_analysis(df, verbose=False):
         print("\n\n")
         print(result)
     return result
+
+
+def run_regression_analysis(df, verbose=False):
+    """Linear regression between predicted and manual (GT) onsets.
+
+    Computes Y(i) = β0 + β1·X(i) + e(i) where X = predicted onset,
+    Y = manual onset, following the framework from the reference paper.
+    Returns a dict with slope, intercept, r_squared, residuals, and
+    absolute deviation (AD) = mean |residual|.
+    """
+    gt_onset   = df['RecallTime'].values
+    pred_onset = df['PredOnset'].values if 'PredOnset' in df.columns else (df['RecallTime'] + df['TimeDiff']).values
+
+    # drop any NaN pairs
+    mask = ~(np.isnan(gt_onset) | np.isnan(pred_onset))
+    gt_onset   = gt_onset[mask]
+    pred_onset = pred_onset[mask]
+
+    if len(gt_onset) < 3:
+        if verbose:
+            print("Warning: not enough data points for regression")
+        return {'slope': np.nan, 'intercept': np.nan, 'r_squared': np.nan,
+                'residuals': np.array([]), 'ad': np.nan, 'n': 0}
+
+    slope, intercept, r_value, p_value, std_err = st.linregress(pred_onset, gt_onset)
+    r_squared = r_value ** 2
+    predicted_manual = intercept + slope * pred_onset
+    residuals = predicted_manual - gt_onset
+    ad = np.mean(np.abs(residuals))
+
+    if verbose:
+        print(f"Regression: slope={slope:.4f}, intercept={intercept:.2f}, "
+              f"R²={r_squared:.4f}, AD={ad:.2f} ms, n={len(gt_onset)}")
+
+    return {
+        'slope':     slope,
+        'intercept': intercept,
+        'r_squared': r_squared,
+        'residuals': residuals,
+        'ad':        ad,
+        'n':         len(gt_onset),
+    }
+
+
+def compute_regression_residuals(df):
+    """Add a 'RegressionResidual' column to df.
+
+    Fits Y(i) = β0 + β1·X(i) where X = predicted onset, Y = manual onset,
+    then stores ê(i) = ŷ(i) − Y(i) as the regression residual for each row.
+    Unlike raw TimeDiff, residuals remove systematic measurement bias.
+    """
+    gt_onset   = df['RecallTime'].values.astype(float)
+    pred_onset = df['PredOnset'].values.astype(float) if 'PredOnset' in df.columns else (df['RecallTime'] + df['TimeDiff']).values.astype(float)
+
+    mask = ~(np.isnan(gt_onset) | np.isnan(pred_onset))
+    if mask.sum() < 3:
+        df['RegressionResidual'] = np.nan
+        return df
+
+    slope, intercept, *_ = st.linregress(pred_onset[mask], gt_onset[mask])
+    predicted_manual = intercept + slope * pred_onset
+    df['RegressionResidual'] = predicted_manual - gt_onset
+    return df
+
+
+def run_roc_analysis(roc_trials, thresholds=None, verbose=False):
+    """Compute ROC curve for word identification accuracy.
+
+    For each confidence threshold, computes:
+    - Hit rate: proportion of GT words found in the (filtered) predicted set
+    - False alarm rate: proportion of predicted words NOT in the GT set
+
+    Parameters
+    ----------
+    roc_trials : list of dict
+        Each dict has 'gt_words' (set), 'pred_words' (list), 'pred_probs' (list),
+        'subject', 'session', 'trial'.
+    thresholds : array-like, optional
+        Confidence thresholds to sweep. Default: 0.0 to 1.0 in 0.1 steps.
+
+    Returns
+    -------
+    roc_df : DataFrame with columns Threshold, HitRate, FalseAlarmRate, HitRate_SE, FalseAlarmRate_SE
+    auc : float, area under the ROC curve
+    """
+    if thresholds is None:
+        thresholds = np.arange(0.0, 1.01, 0.1)
+
+    roc_rows = []
+    for thresh in thresholds:
+        trial_hits = []
+        trial_fas = []
+
+        for trial in roc_trials:
+            gt_words = trial['gt_words']
+            # filter predicted words by confidence threshold
+            filtered_pred = [w for w, p in zip(trial['pred_words'], trial['pred_probs'])
+                             if p >= thresh]
+            filtered_set = set(filtered_pred)
+
+            # hit rate: what fraction of GT words appear in filtered predictions?
+            if len(gt_words) > 0:
+                hits = sum(1 for w in gt_words if w in filtered_set)
+                trial_hits.append(hits / len(gt_words))
+
+            # false alarm rate: what fraction of predicted words are NOT in GT?
+            if len(filtered_pred) > 0:
+                fas = sum(1 for w in filtered_pred if w not in gt_words)
+                trial_fas.append(fas / len(filtered_pred))
+            elif len(gt_words) > 0:
+                trial_fas.append(0.0)
+
+        hit_rate = np.mean(trial_hits) if trial_hits else 0.0
+        fa_rate = np.mean(trial_fas) if trial_fas else 0.0
+        hit_se = np.std(trial_hits) / np.sqrt(len(trial_hits)) if len(trial_hits) > 1 else 0.0
+        fa_se = np.std(trial_fas) / np.sqrt(len(trial_fas)) if len(trial_fas) > 1 else 0.0
+
+        roc_rows.append({
+            'Threshold': round(thresh, 2),
+            'HitRate': hit_rate,
+            'FalseAlarmRate': fa_rate,
+            'HitRate_SE': hit_se,
+            'FalseAlarmRate_SE': fa_se,
+        })
+
+    roc_df = pd.DataFrame(roc_rows)
+
+    # AUC via trapezoidal integration (sorted by ascending FA rate)
+    sorted_df = roc_df.sort_values('FalseAlarmRate')
+    _trapz = getattr(np, 'trapezoid', getattr(np, 'trapz', None))
+    auc = _trapz(sorted_df['HitRate'].values, sorted_df['FalseAlarmRate'].values)
+
+    if verbose:
+        print(f"ROC AUC: {auc:.3f}")
+        print(roc_df.to_string(index=False))
+
+    return roc_df, auc
+
+
+def run_onset_correlation_analysis(df, verbose=False):
+    """Correlate predicted vs manual onset times at three levels.
+
+    Following the approach from the reference paper:
+    1. Within-list: correlation per (subject, session, trial)
+    2. Within-subject: correlation per subject (aggregated across trials)
+    3. Overall: single correlation across all data
+
+    Returns a dict with 'within_list', 'within_subject', 'overall' DataFrames/values.
+    """
+    df = df.dropna(subset=['RecallTime', 'PredOnset']).copy()
+
+    results = {}
+
+    # 1. Within-list correlations
+    list_corrs = []
+    for (subj, sess, trial), grp in df.groupby(['Subject', 'Session', 'Trial']):
+        if len(grp) >= 3:
+            r, p = st.pearsonr(grp['PredOnset'], grp['RecallTime'])
+            list_corrs.append({
+                'Subject': subj, 'Session': sess, 'Trial': trial,
+                'r': r, 'p': p, 'n': len(grp),
+            })
+    results['within_list'] = pd.DataFrame(list_corrs)
+
+    # 2. Within-subject correlations
+    subj_corrs = []
+    for subj, grp in df.groupby('Subject'):
+        if len(grp) >= 3:
+            r, p = st.pearsonr(grp['PredOnset'], grp['RecallTime'])
+            subj_corrs.append({
+                'Subject': subj, 'r': r, 'p': p, 'n': len(grp),
+            })
+    results['within_subject'] = pd.DataFrame(subj_corrs)
+
+    # 3. Overall correlation
+    if len(df) >= 3:
+        r, p = st.pearsonr(df['PredOnset'], df['RecallTime'])
+        results['overall'] = {'r': r, 'p': p, 'n': len(df)}
+    else:
+        results['overall'] = {'r': np.nan, 'p': np.nan, 'n': len(df)}
+
+    if verbose:
+        wl = results['within_list']
+        ws = results['within_subject']
+        ov = results['overall']
+        if len(wl) > 0:
+            print(f"Within-list correlations: mean r={wl['r'].mean():.4f}, min r={wl['r'].min():.4f}, n_lists={len(wl)}")
+        if len(ws) > 0:
+            print(f"Within-subject correlations: mean r={ws['r'].mean():.4f}, min r={ws['r'].min():.4f}, n_subjects={len(ws)}")
+        print(f"Overall correlation: r={ov['r']:.4f}, p={ov['p']:.2e}, n={ov['n']}")
+
+    return results
 
 
 def run_word_analysis(df, verbose=False):
@@ -321,12 +544,13 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
         if verbose:
             print(f"Done. GT has {gt_df['subject'].nunique()} subjects, {len(gt_df)} rows.")
 
+    print(gt_df)
 
     # 1. word error rate analysis
-    # recursively find how many patients there are
-    sub_path = find_target_folder(pred, output_subdir=output_subdir)
+    # recursively find all subject directories across all splits
+    subject_entries = find_target_folder(pred, output_subdir=output_subdir)
     if verbose:
-        print(f"Found target folder: {sub_path}")
+        print(f"Found {len(subject_entries)} subject directories across all splits")
 
     sublist = []
     seshlist = []
@@ -350,6 +574,10 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
     aggr_timediffs = []
     aggr_probs = []
     aggr_onsets = []
+    aggr_subjects = []
+    aggr_sessions = []
+    aggr_trials = []
+    aggr_pred_onsets = []
 
     # mismatched words
     mis_aggr_words = []
@@ -357,15 +585,16 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
     mis_aggr_probs = []
     mis_aggr_onsets = []
 
+    # ROC: per-trial word-level comparisons
+    roc_trials = []  # list of dicts: {gt_words, pred_words, pred_probs, subject, session, trial}
+
 
     # for each subject, compute the metrics separately.
-    for ltpsub in os.listdir(sub_path):
-        if os.path.isdir(os.path.join(sub_path, ltpsub)):
+    for single_sub_path, ltpsub in subject_entries:
             print("Processing subject: {}....".format(ltpsub))
             sub_events = gt_df[gt_df["subject"] == ltpsub]
 
             # fetch all sessions
-            single_sub_path = os.path.join(sub_path, ltpsub)
             sessions = [sesh for sesh in os.listdir(single_sub_path) if os.path.isdir(os.path.join(single_sub_path, sesh))]
 
             # perform analysis for each session.
@@ -388,7 +617,7 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
                 # word error rate for single session
                 if verbose:
                     print("Processing session... ", sesh)
-                wer, diff, word, pred_onset, pred_prob, gt_onset, match, mismatch = word_error_rate(sub_events, int(sessnum), pred_path, verbose)
+                wer, diff, word, pred_onset, pred_prob, gt_onset, match, mismatch, trial_nums, trial_roc = word_error_rate(sub_events, int(sessnum), pred_path, verbose)
 
 
                 if (np.mean(wer) < 0.1):
@@ -407,12 +636,23 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
                     aggr_timediffs.extend(match[1])
                     aggr_probs.extend(match[2])
                     aggr_onsets.extend(match[3])
+                    aggr_pred_onsets.extend(match[4])
+                    aggr_trials.extend(match[5])
+                    n_matched = len(match[0])
+                    aggr_subjects.extend([ltpsub] * n_matched)
+                    aggr_sessions.extend([sesh] * n_matched)
 
                     # aggregation for mismatched words
                     mis_aggr_words.extend(mismatch[0])
                     mis_aggr_timediffs.extend(mismatch[1])
                     mis_aggr_probs.extend(mismatch[2])
                     mis_aggr_onsets.extend(mismatch[3])
+
+                    # ROC trial data
+                    for trd in trial_roc:
+                        trd['subject'] = ltpsub
+                        trd['session'] = sesh
+                    roc_trials.extend(trial_roc)
 
                 else:
                     problem_sublist.append(ltpsub)
@@ -484,7 +724,11 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
     'Word': aggr_words,
     'TimeDiff' : aggr_timediffs,
     'Probability' : aggr_probs,
-    'RecallTime' : aggr_onsets
+    'RecallTime' : aggr_onsets,
+    'PredOnset' : aggr_pred_onsets,
+    'Subject' : aggr_subjects,
+    'Session' : aggr_sessions,
+    'Trial' : aggr_trials,
     }
 
     mismatched_data = {
@@ -498,6 +742,10 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
     print("\n\n====Performing subsequent analysis====")
     aggregate = pd.DataFrame(data)
     mismatch_aggregate = pd.DataFrame(mismatched_data)
+
+    # Add regression residuals (bias-corrected onset error)
+    aggregate = compute_regression_residuals(aggregate)
+    mismatch_aggregate = compute_regression_residuals(mismatch_aggregate)
 
     # Save aggregate word-level data for downstream plotting
     aggregate.to_csv(os.path.join(pred, "aggregate_words.csv"), index=False)
@@ -525,15 +773,76 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
     conf_results = run_confidence_analysis(aggregate, verbose)
     conf_outtext = conf_results.to_string()
 
+    # Regression R² (pred onset vs manual onset)
+    regression_results = run_regression_analysis(aggregate, verbose)
+
+    # ROC analysis for word identification accuracy
+    roc_df, roc_auc = run_roc_analysis(roc_trials, verbose=verbose)
+    roc_df.to_csv(os.path.join(pred, "roc_curve.csv"), index=False)
+
+    # Onset correlation analysis (within-list, within-subject, overall)
+    correlation_results = run_onset_correlation_analysis(aggregate, verbose=verbose)
+    if len(correlation_results['within_list']) > 0:
+        correlation_results['within_list'].to_csv(os.path.join(pred, "correlations_within_list.csv"), index=False)
+    if len(correlation_results['within_subject']) > 0:
+        correlation_results['within_subject'].to_csv(os.path.join(pred, "correlations_within_subject.csv"), index=False)
+
+    # compute dataset counts
+    n_total_subjects  = out_df['subject'].nunique()
+    n_total_sessions  = len(out_df)
+    n_good_subjects   = out_df3['subject'].nunique()
+    n_good_sessions   = len(out_df3)
+    n_problem_sessions = len(out_df2)
+    n_matched_words   = len(aggregate)
+    n_mismatched_words = len(mismatch_aggregate)
+    n_roc_trials      = len(roc_trials)
+    n_total_recordings = n_matched_words + n_mismatched_words
+
+    counts = {
+        'n_total_subjects':   n_total_subjects,
+        'n_total_sessions':   n_total_sessions,
+        'n_good_subjects':    n_good_subjects,
+        'n_good_sessions':    n_good_sessions,
+        'n_problem_sessions': n_problem_sessions,
+        'n_matched_words':    n_matched_words,
+        'n_mismatched_words': n_mismatched_words,
+        'n_total_recordings': n_total_recordings,
+        'n_roc_trials':       n_roc_trials,
+    }
+
+    print(f'\n{"="*60}')
+    print(f'  Dataset Counts')
+    print(f'{"="*60}')
+    print(f'  Total subjects:       {n_total_subjects}')
+    print(f'  Total sessions:       {n_total_sessions}')
+    print(f'  Good sessions (WER<0.1): {n_good_sessions} ({n_good_subjects} subjects)')
+    print(f'  Problem sessions:     {n_problem_sessions}')
+    print(f'  Matched words:        {n_matched_words}')
+    print(f'  Mismatched words:     {n_mismatched_words}')
+    print(f'  Total word pairs:     {n_total_recordings}')
+    print(f'  ROC trials:           {n_roc_trials}')
+    print(f'{"="*60}\n')
+
     # write summary statistics to a text file
     txtpath = os.path.join(pred, "summary_stats.txt")
     with open(txtpath, "w") as file:
         file.write("=====  Analysis Results  =====\n")
+        file.write(f"Total subjects: {n_total_subjects}\n")
+        file.write(f"Total sessions: {n_total_sessions}\n")
+        file.write(f"Good sessions (WER<0.1): {n_good_sessions} ({n_good_subjects} subjects)\n")
+        file.write(f"Problem sessions: {n_problem_sessions}\n")
+        file.write(f"Matched word pairs: {n_matched_words}\n")
+        file.write(f"Mismatched word pairs: {n_mismatched_words}\n")
+        file.write(f"ROC trials: {n_roc_trials}\n\n")
         file.write("mean WER : {:.4f}, CI: {}".format(result['wer'].mean(), wer_interval))
         file.write("\nmean onset difference (Prediction - GT) : {:.4f} ms, CI: {}".format(result['diff_mean'].mean(), mean_interval))
         file.write("\nstd onset difference (Prediction - GT) : {:.4f} ms, CI: {}\n\n".format(result['diff_stdev'].mean(), std_interval))
 
-        file.write("\n\nMean Onset Difference for Matched Words: {}\n".format(aggregate['TimeDiff'].mean()))
+        file.write("\n\nRegression (pred vs manual onset): R²={:.4f}, slope={:.4f}, intercept={:.2f}, AD={:.2f} ms, n={}\n".format(
+            regression_results['r_squared'], regression_results['slope'],
+            regression_results['intercept'], regression_results['ad'], regression_results['n']))
+
+        file.write("\nMean Onset Difference for Matched Words: {}\n".format(aggregate['TimeDiff'].mean()))
         file.write("Mean Onset Difference for Mismatched Words: {}\n".format(mismatch_aggregate['TimeDiff'].mean()))
 
         file.write('\nLeading Phonemes analysis:\n')
@@ -546,6 +855,20 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
         file.write(time_outtext)
         file.write('\n\nConfidence level analysis:\n')
         file.write(conf_outtext)
+
+        file.write(f'\n\nROC Analysis (word identification):\n')
+        file.write(f'AUC: {roc_auc:.3f}\n')
+        file.write(roc_df.to_string(index=False))
+
+        file.write(f'\n\nOnset Correlation Analysis:\n')
+        ov = correlation_results['overall']
+        file.write(f'Overall: r={ov["r"]:.4f}, p={ov["p"]:.2e}, n={ov["n"]}\n')
+        ws = correlation_results['within_subject']
+        if len(ws) > 0:
+            file.write(f'Within-subject: mean r={ws["r"].mean():.4f}, min r={ws["r"].min():.4f}, n_subjects={len(ws)}\n')
+        wl = correlation_results['within_list']
+        if len(wl) > 0:
+            file.write(f'Within-list: mean r={wl["r"].mean():.4f}, min r={wl["r"].min():.4f}, n_lists={len(wl)}\n')
 
     return {
         # word-level aggregates
@@ -567,6 +890,14 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
         'cluster_df':         cluster_df,
         'recall_time':        time_results,
         'confidence':         conf_results,
+        'regression':         regression_results,
+        # ROC analysis
+        'roc':                roc_df,
+        'roc_auc':            roc_auc,
+        # onset correlations
+        'correlations':       correlation_results,
+        # dataset counts
+        'counts':             counts,
     }
 
 
@@ -590,27 +921,33 @@ def anntopar(outdir, filename):
 
 # helper function to recursively find the target directory
 def find_target_folder(input_directory, output_subdir='whisperx_out'):
-    # Walk through the directory recursively
+    """Find all subject directories containing output_subdir results.
+
+    Returns a list of (subject_directory, subject_name) tuples collected
+    across every split found under *input_directory*.  Duplicate subjects
+    (same name appearing in multiple splits) are kept so that all sessions
+    are analysed.
+    """
+    subject_dirs = []  # list of (subject_directory_path, subject_name)
+    seen = set()
+
     for dirpath, dirnames, filenames in os.walk(input_directory):
-        # Check if current directory is "whisperx_out"
         if os.path.basename(dirpath) == output_subdir:
-            # Check if all files in the directory are CSV files
-
             if all(filename.endswith('.csv') for filename in filenames):
-                parent_directory = os.path.dirname(dirpath)
-                # Count the number of folders in the parent directory
-                session_directory = os.path.dirname(parent_directory)
-                num_folders = sum([1 for name in os.listdir(session_directory) if os.path.isdir(os.path.join(session_directory, name))])
-                #print(f"Parent folder name: {os.path.basename(session_directory)}")
-                #print(f"Number of sessions in the patient: {num_folders}")
+                # dirpath = .../subject/session_N/whisperx_out
+                session_directory = os.path.dirname(dirpath)       # .../subject/session_N
+                subject_directory = os.path.dirname(session_directory)  # .../subject
+                parent_directory  = os.path.dirname(subject_directory)  # dir holding all subjects for this split
 
-                subject_directory = os.path.dirname(session_directory)
-                #print(subject_directory)
-                num_subs = sum([1 for name in os.listdir(subject_directory) if os.path.isdir(os.path.join(subject_directory, name))])
-                #print(f"Number of subjects: {num_subs}")
+                # Collect every subject under this parent (i.e. this split)
+                if parent_directory not in seen:
+                    seen.add(parent_directory)
+                    for name in os.listdir(parent_directory):
+                        full = os.path.join(parent_directory, name)
+                        if os.path.isdir(full):
+                            subject_dirs.append((full, name))
 
-                # returns the directory where all subject folders (LTP-...) are located
-                return subject_directory
+    return subject_dirs
 
 
 if __name__ == "__main__":

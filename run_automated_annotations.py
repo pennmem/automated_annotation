@@ -37,9 +37,9 @@ def current_time_string(fmt='%Y_%m_%d__%H_%M_%S'):
 def main(args):
     # create input/output dirs in Jupyter for convenience but run here
     # since Jupyter appears to have file permissions issues
-    with open('input_dirs.pkl', 'rb') as f:
+    with open(f'{args.tag}_input_dirs.pkl', 'rb') as f:
         all_input_dirs = pickle.load(f)
-    with open('output_dirs.pkl', 'rb') as f:
+    with open(f'{args.tag}_output_dirs.pkl', 'rb') as f:
         all_output_dirs = pickle.load(f)
 
     # aggregate run parameters
@@ -56,6 +56,11 @@ def main(args):
         raise ValueError(f"Cannot determine backend from tag '{tag}'. "
                          f"Tag must contain one of: whisper, whisperx, assemblyai")
     
+    # build args dict to pass to backend wrappers
+    args_dict = {}
+    if args.rules is not None:
+        args_dict['rules'] = args.rules
+
     run_args = dict()
     run_args['meta'] = dict()
     run_args['meta']['run_start_timestamp'] = current_time_string('%Y-%m-%d_%H:%M:%S')
@@ -102,19 +107,12 @@ def main(args):
         all_output_dirs[tag] = dirs_temp
     else:
         # assert that input and output directories match on shared structure
-        splits = ['train', 'val', 'test']
+        # print(all_output_dirs)
         for inp, out in zip(all_input_dirs[tag], all_output_dirs[tag]):
             assert inp != out
-            out_split = None
-            for split in splits:
-                if split in out: out_split = split
-            if isinstance(out_split, type(None)): raise ValueError
-            out_strip = out.split(f'{tag}/{out_split}')[-1]
-            fail_match = False
-            if inp != out_strip:
-                fail_match = True
-            if fail_match:
-                raise ValueError('Input/output directories do not match past {tag}/{split}!')
+            out_strip = out.split(f'{tag}/')[-1]
+            if inp.lstrip('/') != out_strip.lstrip('/'):
+                raise ValueError(f'Input/output directories do not match past {tag}/!')
                 
     # session-level checkpointing: skip sessions where all outputs exist
     if not args.force_recompute:
@@ -140,28 +138,56 @@ def main(args):
         all_input_dirs[tag] = filtered_in
         all_output_dirs[tag] = filtered_out
 
+    # build per-session device list (round-robin across GPUs)
+    n = len(all_output_dirs[tag])
+    if args.num_gpus and args.num_gpus > 0:
+        devices = [f'cuda:{i % args.num_gpus}' for i in range(n)]
+        use_gpu = True
+    else:
+        devices = [args.device] * n
+        use_gpu = args.use_gpu
+
     # run models
+    is_assemblyai = 'assemblyai' in tag.lower()
     if args.use_dask:
         # if args.smokescreen: from dask.distributed import print
         dask_args = {'job_name': 'auto_annotate', 'memory_per_job': "9GB", 'max_n_jobs': 150,
                     'death_timeout': 600, 'extra': ['--no-dashboard'], 'log_directory': 'logs'}
         client = CMLDask.new_dask_client_slurm(**dask_args)
-        n = len(all_output_dirs[tag])
-        dask_inputs = [all_input_dirs[tag],
-                       all_output_dirs[tag],
-                       [args.use_gpu] * n,
-                       [args.device] * n,
-                       [args.smokescreen] * n,
-                       [args.force_recompute] * n]
+        if is_assemblyai:
+            dask_inputs = [all_input_dirs[tag],
+                           all_output_dirs[tag],
+                           [args.smokescreen] * n,
+                           [args.force_recompute] * n,
+                           [args_dict] * n]
+        else:
+            dask_inputs = [all_input_dirs[tag],
+                           all_output_dirs[tag],
+                           [use_gpu] * n,
+                           devices,
+                           [args.smokescreen] * n,
+                           [args.force_recompute] * n,
+                           [args_dict] * n]
         futures = client.map(func, *dask_inputs)
         wait(futures)
     else:
-        for in_dir, out_dir in zip(all_input_dirs[tag], all_output_dirs[tag]):
-            func(in_dir, out_dir,
-                 use_gpu=args.use_gpu,
-                 device=args.device,
-                 smokescreen=args.smokescreen,
-                 force_recompute=args.force_recompute)
+        for in_dir, out_dir, device in zip(all_input_dirs[tag], all_output_dirs[tag], devices):
+            try:
+                if is_assemblyai:
+                    func(in_dir, out_dir,
+                        smokescreen=args.smokescreen,
+                        force_recompute=args.force_recompute,
+                        args=args_dict)
+                else:
+                    func(in_dir, out_dir,
+                        use_gpu=use_gpu,
+                        device=device,
+                        smokescreen=args.smokescreen,
+                        force_recompute=args.force_recompute,
+                        args=args_dict)
+            except Exception as e:
+                print(e)
+    
     
     # save out run completion timestamp
     run_args['meta']['run_finished_timestamp'] = current_time_string('%Y-%m-%d_%H:%M:%S')
@@ -177,9 +203,13 @@ if __name__ == '__main__':
     parser.add_argument('--use-gpu', action='store_true', help="Flag to use GPU. Default is False.")
     parser.add_argument('--device', type=str, default=None,
                         help="Device string (e.g. cuda:0, cuda:1, cpu). Overrides --use-gpu when set.")
+    parser.add_argument('--num-gpus', type=int, default=None,
+                        help="Number of GPUs to round-robin across (e.g. 4 → cuda:0..cuda:3). Implies --use-gpu.")
     parser.add_argument('--smokescreen', action='store_true', dest='smokescreen',
                         help="Flag to enable smokescreen run for quick tests.")
-    parser.add_argument('--force_recompute', action='store_true', 
+    parser.add_argument('--force_recompute', action='store_true',
                         help="Flag to force results recomputation. Otherwise, audio recordings with saved annotation outputs will be skipped.")
+    parser.add_argument('--rules', nargs='*', default=None,
+                        help="Output rules to apply, e.g. UpperCase MultiWordMerge WordpoolIndex")
     args = parser.parse_args()
     main(args)

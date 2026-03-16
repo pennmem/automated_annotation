@@ -46,48 +46,62 @@ def _semantic_similarity(word_a, word_b, threshold=0.5):
         return False
 
 
-class Normalization(OutputRule):
-    """Normalize words to their wordpool form using suffix rules and semantic similarity.
+class UpperCase(OutputRule):
+    """Normalize words to uppercase."""
 
-    Handles plurals, common suffixes, and substring matches, but only accepts
-    a candidate if it is semantically similar (via word2vec) to the original word.
-    Exact suffix matches (plural -S, -ES, -ED) are accepted without a similarity
-    check since they are morphological variants of the same word.
-    """
+    def apply(self, df, context):
+        df = df.copy()
+        df['Word'] = df['Word'].str.strip().str.upper()
+        return df
+
+
+class SuffixStripping(OutputRule):
+    """Strip common suffixes (plurals, -ed) to match wordpool base forms."""
 
     def apply(self, df, context):
         wordpool = context.get('wordpool')
         if wordpool is None:
             return df
+        wp_set = set(w.upper() for w in wordpool)
         df = df.copy()
-        df['Word'] = df['Word'].apply(lambda w: self._normalize(w, wordpool))
+        df['Word'] = df['Word'].apply(lambda w: self._strip(w.upper(), wp_set))
         return df
 
     @staticmethod
-    def _normalize(word, wordpool):
-        upper = word.upper()
-        if upper in wordpool:
+    def _strip(upper, wp_set):
+        if upper in wp_set:
             return upper
-
-        # Morphological suffix stripping (no similarity check needed)
         for suffix, strip_len in [('S', 1), ('ES', 2), ('ED', 2)]:
-            if upper.endswith(suffix) and upper[:-strip_len] in wordpool:
+            if upper.endswith(suffix) and upper[:-strip_len] in wp_set:
                 return upper[:-strip_len]
+        return upper
 
-        # Substring containment: accept only if semantically similar
+
+class SemanticMatch(OutputRule):
+    """Match words to wordpool entries via substring containment + word2vec similarity."""
+
+    def apply(self, df, context):
+        wordpool = context.get('wordpool')
+        if wordpool is None:
+            return df
+        wp_set = set(w.upper() for w in wordpool)
+        df = df.copy()
+        df['Word'] = df['Word'].apply(lambda w: self._match(w.upper(), wp_set))
+        return df
+
+    @staticmethod
+    def _match(upper, wp_set):
+        if upper in wp_set:
+            return upper
         best = None
-        for wp_word in wordpool:
+        for wp_word in wp_set:
             if wp_word in upper and len(wp_word) >= 3:
                 if best is None or len(wp_word) > len(best):
                     best = wp_word
         if best is not None and _semantic_similarity(upper, best):
             return best
-
         return upper
 
-
-# Keep old name as alias for backwards compatibility
-PluralNormalization = Normalization
 
 
 class ListWordPreference(OutputRule):
@@ -260,7 +274,9 @@ class WordpoolIndex(OutputRule):
 
 
 OUTPUT_RULE_REGISTRY = {
-    'Normalization': Normalization,
+    'UpperCase': UpperCase,
+    'SuffixStripping': SuffixStripping,
+    'SemanticMatch': SemanticMatch,
     'MultiWordMerge': MultiWordMerge,
     'ListWordPreference': ListWordPreference,
     'WordpoolFilter': WordpoolFilter,
@@ -295,6 +311,8 @@ def build_output_rules(args):
 
 def apply_output_rules(df, rules, context):
     """Apply a list of output rules to a transcription DataFrame."""
+    if df.empty:
+        return df
     for rule in rules:
         df = rule.apply(df, context)
     return df
