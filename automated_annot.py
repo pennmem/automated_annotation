@@ -129,6 +129,7 @@ def run_transcription(in_dir, out_dir, backend_name, args=dict(),
             # gettting rid of input context
             # df = backend.transcribe_file(filepath, smokescreen=smokescreen, args=args, context=context)
             df = backend.transcribe_file(filepath, smokescreen=smokescreen, args=args)
+            context['wav_path'] = filepath
             df = apply_output_rules(df, output_rules, context)
             print(df)
             df.to_csv(savepath, index=False)

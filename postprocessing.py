@@ -1,6 +1,7 @@
 import glob
 import os
 import re
+import wave
 import pandas as pd
 from abc import ABC, abstractmethod
 
@@ -273,6 +274,37 @@ class WordpoolIndex(OutputRule):
 
 
 
+class EmptyVocalization(OutputRule):
+    """Insert a vocalization mark for WAV files with no detected words.
+
+    If the transcription produced an empty DataFrame (no vocalizations detected),
+    create a single '<>' mark with onset at the last second of the WAV file and
+    offset 500ms later. This ensures every WAV file produces at least one annotation.
+
+    Requires context['wav_path'] to be set to the current WAV file path.
+    """
+
+    def apply(self, df, context):
+        if not df.empty:
+            return df
+        wav_path = context.get('wav_path')
+        if not wav_path or not os.path.exists(wav_path):
+            return df
+        try:
+            with wave.open(wav_path, 'rb') as wf:
+                duration_ms = int(wf.getnframes() / wf.getframerate() * 1000)
+        except Exception:
+            return df
+        onset = max(0, duration_ms - 1000)
+        offset = onset + 500
+        return pd.DataFrame([{
+            'Word': '<>',
+            'Onset': onset,
+            'Offset': offset,
+            'Probability': 0.0,
+        }])
+
+
 OUTPUT_RULE_REGISTRY = {
     'UpperCase': UpperCase,
     'SuffixStripping': SuffixStripping,
@@ -283,6 +315,7 @@ OUTPUT_RULE_REGISTRY = {
     'OnsetAdjust': OnsetAdjust,
     'LongDurationVocalization': LongDurationVocalization,
     'WordpoolIndex': WordpoolIndex,
+    'EmptyVocalization': EmptyVocalization,
 }
 
 
@@ -306,14 +339,19 @@ def build_output_rules(args):
                 f"Unknown output rule '{name}'. Available: {list(OUTPUT_RULE_REGISTRY.keys())}"
             )
         rules.append(OUTPUT_RULE_REGISTRY[name]())
+
+    # EmptyVocalization always runs as a check on all sessions
+    if not any(isinstance(r, EmptyVocalization) for r in rules):
+        rules.append(EmptyVocalization())
+
     return rules
 
 
 def apply_output_rules(df, rules, context):
     """Apply a list of output rules to a transcription DataFrame."""
-    if df.empty:
-        return df
     for rule in rules:
+        if df.empty and not isinstance(rule, EmptyVocalization):
+            continue
         df = rule.apply(df, context)
     return df
 
