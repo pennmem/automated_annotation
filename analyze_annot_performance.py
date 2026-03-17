@@ -901,6 +901,123 @@ def run_all_analysis(gt, pred, verbose=False, use_csv=False, csvpath=None,
     }
 
 
+def load_analysis(pred_dir, verbose=False):
+    """Load previously saved analysis results and re-derive sub-analyses.
+
+    Reads the CSVs written by run_all_analysis() and re-computes phoneme,
+    word, cluster, recall-time, confidence, regression, ROC, and correlation
+    analyses from the saved aggregate data. This avoids re-running the
+    expensive WER computation.
+
+    Parameters
+    ----------
+    pred_dir : str
+        Path to the results directory (same as `pred` passed to run_all_analysis).
+    verbose : bool
+        Print progress info.
+
+    Returns
+    -------
+    dict with the same keys as run_all_analysis().
+    """
+    # Load saved CSVs
+    results_df    = pd.read_csv(os.path.join(pred_dir, 'results.csv'), index_col=0)
+    good_futures  = pd.read_csv(os.path.join(pred_dir, 'good_futures.csv'), index_col=0)
+    problem_df    = pd.read_csv(os.path.join(pred_dir, 'problem_sessions.csv'), index_col=0)
+    subject_means = pd.read_csv(os.path.join(pred_dir, 'subject_means.csv'), index_col=0)
+    aggregate     = pd.read_csv(os.path.join(pred_dir, 'aggregate_words.csv'))
+    mismatch_agg  = pd.read_csv(os.path.join(pred_dir, 'aggregate_mismatched.csv'))
+    roc_df        = pd.read_csv(os.path.join(pred_dir, 'roc_curve.csv'))
+
+    corr_wl_path = os.path.join(pred_dir, 'correlations_within_list.csv')
+    corr_ws_path = os.path.join(pred_dir, 'correlations_within_subject.csv')
+
+    if verbose:
+        print(f'Loaded from {pred_dir}:')
+        print(f'  {len(results_df)} total sessions, {len(good_futures)} good, {len(problem_df)} problem')
+        print(f'  {len(aggregate)} matched words, {len(mismatch_agg)} mismatched')
+
+    # Confidence intervals
+    n = len(subject_means)
+    wer_ci  = st.t.interval(confidence=0.95, df=n-1, loc=subject_means['wer'].mean(),
+                            scale=st.sem(subject_means['wer']))
+    mean_ci = st.t.interval(confidence=0.95, df=n-1, loc=subject_means['diff_mean'].mean(),
+                            scale=st.sem(subject_means['diff_mean']))
+    std_ci  = st.t.interval(confidence=0.95, df=n-1, loc=subject_means['diff_stdev'].mean(),
+                            scale=st.sem(subject_means['diff_stdev']))
+
+    # Re-derive sub-analyses from aggregate
+    phon_results    = run_phoneme_analysis(aggregate.copy(), verbose)
+    word_results    = run_word_analysis(aggregate.copy(), verbose)
+    cluster_results, cluster_df = run_cluster_analysis(aggregate.copy(), verbose=verbose)
+    time_results    = run_recall_time_analysis(aggregate.copy(), verbose)
+    conf_results    = run_confidence_analysis(aggregate.copy(), verbose)
+    regression      = run_regression_analysis(aggregate.copy(), verbose)
+
+    # ROC AUC from saved curve
+    sorted_roc = roc_df.sort_values('FalseAlarmRate')
+    _trapz = getattr(np, 'trapezoid', getattr(np, 'trapz', None))
+    roc_auc = _trapz(sorted_roc['HitRate'].values, sorted_roc['FalseAlarmRate'].values)
+
+    # Correlations: load from CSV if available, otherwise re-derive
+    correlations = {}
+    if os.path.exists(corr_wl_path):
+        correlations['within_list'] = pd.read_csv(corr_wl_path)
+    else:
+        correlations['within_list'] = pd.DataFrame()
+    if os.path.exists(corr_ws_path):
+        correlations['within_subject'] = pd.read_csv(corr_ws_path)
+    else:
+        correlations['within_subject'] = pd.DataFrame()
+
+    # Overall correlation
+    agg_clean = aggregate.dropna(subset=['RecallTime', 'PredOnset'])
+    if len(agg_clean) >= 3:
+        r, p = st.pearsonr(agg_clean['PredOnset'], agg_clean['RecallTime'])
+        correlations['overall'] = {'r': r, 'p': p, 'n': len(agg_clean)}
+    else:
+        correlations['overall'] = {'r': np.nan, 'p': np.nan, 'n': len(agg_clean)}
+
+    # Dataset counts
+    counts = {
+        'n_total_subjects':   results_df['subject'].nunique(),
+        'n_total_sessions':   len(results_df),
+        'n_good_subjects':    good_futures['subject'].nunique(),
+        'n_good_sessions':    len(good_futures),
+        'n_problem_sessions': len(problem_df),
+        'n_matched_words':    len(aggregate),
+        'n_mismatched_words': len(mismatch_agg),
+        'n_total_recordings': len(aggregate) + len(mismatch_agg),
+        'n_roc_trials':       0,  # not recoverable from saved data
+    }
+
+    if verbose:
+        print(f'  Re-derived: phoneme({len(phon_results)}), word({len(word_results)}), '
+              f'regression(R²={regression["r_squared"]:.4f}), ROC AUC={roc_auc:.3f}')
+
+    return {
+        'aggregate':          aggregate,
+        'mismatch_aggregate': mismatch_agg,
+        'results':            results_df,
+        'good_futures':       good_futures,
+        'problem_sessions':   problem_df,
+        'subject_means':      subject_means,
+        'wer_ci':             wer_ci,
+        'mean_ci':            mean_ci,
+        'std_ci':             std_ci,
+        'phoneme':            phon_results,
+        'word':               word_results,
+        'cluster':            cluster_results,
+        'cluster_df':         cluster_df,
+        'recall_time':        time_results,
+        'confidence':         conf_results,
+        'regression':         regression,
+        'roc':                roc_df,
+        'roc_auc':            roc_auc,
+        'correlations':       correlations,
+        'counts':             counts,
+    }
+
 
 # helper function to convert .ann files to .par to facilitate analysis
 def anntopar(outdir, filename):
