@@ -33,7 +33,6 @@ sys.path.insert(0, SCRIPT_DIR)
 
 LTP_ROOT                = '/data/eeg/scalp/ltp'
 ACTIVE_EXPERIMENTS_FILE = os.path.join(LTP_ROOT, 'ACTIVE_EXPERIMENTS.txt')
-DEFAULT_MAX_AGE_DAYS    = 7
 DEFAULT_BACKEND         = 'whisperx'
 
 os.makedirs(os.path.join(SCRIPT_DIR, 'logs'), exist_ok=True)
@@ -55,9 +54,15 @@ def load_active_experiments(path: str = ACTIVE_EXPERIMENTS_FILE):
         return [ln.strip() for ln in f if ln.strip() and not ln.startswith('#')]
 
 
-def find_sessions_needing_annotation(experiments, max_age_days: float = DEFAULT_MAX_AGE_DAYS):
-    """Return session dirs that have a recently modified {exp}.json but no .ann file."""
-    cutoff = time.time() - max_age_days * 86400
+def find_sessions_needing_annotation(experiments):
+    """Return session dirs that need annotation.
+
+    A session is skipped if:
+      - It has no numbered .wav files (nothing to annotate)
+      - It already has a .par file for every .wav file (human-annotated)
+      - It already has a .ann file for every .wav file (already annotated)
+      - The directory is not writable
+    """
     sessions = []
 
     for exp in experiments:
@@ -66,19 +71,33 @@ def find_sessions_needing_annotation(experiments, max_age_days: float = DEFAULT_
             logger.warning(f'Experiment directory not found: {exp_dir}')
             continue
 
-        pattern = os.path.join(exp_dir, '*', 'session_*', f'{exp}.json')
-        for json_path in glob.glob(pattern):
-            if os.path.getmtime(json_path) < cutoff:
+        for session_dir in sorted(glob.glob(os.path.join(exp_dir, '*', 'session_*'))):
+            if not os.path.isdir(session_dir):
                 continue
 
-            session_dir = os.path.dirname(json_path)
-
-            if glob.glob(os.path.join(session_dir, '*.ann')):
-                logger.debug(f'Skipping (already annotated): {session_dir}')
-                continue
-
-            if not _numbered_wavs(session_dir):
+            wav_files = _numbered_wavs(session_dir)
+            if not wav_files:
                 logger.debug(f'Skipping (no numbered wav files): {session_dir}')
+                continue
+
+            wav_basenames = {os.path.splitext(os.path.basename(w))[0] for w in wav_files}
+
+            # Skip if every wav has a corresponding .par file (human-annotated)
+            par_basenames = {
+                os.path.splitext(os.path.basename(p))[0]
+                for p in glob.glob(os.path.join(session_dir, '*.par'))
+            }
+            if wav_basenames <= par_basenames:
+                logger.debug(f'Skipping (all par files present): {session_dir}')
+                continue
+
+            # Skip if every wav has a corresponding .ann file (already annotated)
+            ann_basenames = {
+                os.path.splitext(os.path.basename(a))[0]
+                for a in glob.glob(os.path.join(session_dir, '*.ann'))
+            }
+            if wav_basenames <= ann_basenames:
+                logger.debug(f'Skipping (all ann files present): {session_dir}')
                 continue
 
             if not os.access(session_dir, os.W_OK):
@@ -218,8 +237,8 @@ def main():
     parser.add_argument('--model-name', default=None,
                         help='Name used in output filenames and #Annotator field. '
                              'Defaults to the backend name.')
-    parser.add_argument('--max-age-days', type=float, default=DEFAULT_MAX_AGE_DAYS,
-                        help='Only consider sessions modified within this many days')
+    # parser.add_argument('--max-age-days', type=float, default=DEFAULT_MAX_AGE_DAYS,
+    #                     help='Only consider sessions modified within this many days')
     parser.add_argument('--use-gpu', action='store_true',
                         help='Enable GPU acceleration (whisperx/whisper only)')
     parser.add_argument('--device', default=None,
@@ -247,9 +266,7 @@ def main():
     experiments = load_active_experiments(args.experiments_file)
     logger.info(f'Active experiments: {experiments}')
 
-    sessions = find_sessions_needing_annotation(
-        experiments, max_age_days=args.max_age_days
-    )
+    sessions = find_sessions_needing_annotation(experiments)
     logger.info(f'Sessions needing annotation: {len(sessions)}')
 
     if args.dry_run:
