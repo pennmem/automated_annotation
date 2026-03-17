@@ -173,7 +173,7 @@ def _annotate_worker(session_dir: str, backend_name: str, model_name: str,
 
         for csv_path in csv_files:
             trial_num = os.path.splitext(os.path.basename(csv_path))[0]
-            dest_csv  = os.path.join(session_dir, f'{model_name}_{trial_num}.csv')
+            dest_csv  = os.path.join(session_dir, f'auto_{model_name}_{trial_num}.csv')
             dest_ann  = os.path.join(session_dir, f'{trial_num}.ann')
 
             try:
@@ -196,6 +196,12 @@ def _annotate_worker(session_dir: str, backend_name: str, model_name: str,
             #     pf_ann = os.path.join(pf_session, f'{trial_num}.ann')
             #     shutil.copy2(dest_ann, pf_ann)
             #     log.info(f'  Mirrored ANN: {pf_ann}')
+
+    # Write marker file indicating this session was auto-annotated
+    marker_path = os.path.join(session_dir, 'AUTOMATED_ANNOT')
+    with open(marker_path, 'w') as _f:
+        _f.write(f'backend={backend_name}\nmodel_name={model_name}\n')
+    log.info(f'  Wrote marker: {marker_path}')
 
     return session_dir
 
