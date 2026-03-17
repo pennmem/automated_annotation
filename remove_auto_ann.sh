@@ -1,6 +1,8 @@
 #!/bin/bash
-# Remove auto-generated .ann files from session directories that contain
-# an AUTOMATED_ANNOT marker file.
+# Remove auto-generated .ann and .csv files from session directories that were
+# auto-annotated. A session is considered auto-annotated if it contains an
+# AUTOMATED_ANNOT marker file or a model output subdirectory (whisperx_out,
+# whisper_out, assemblyai_out) with .csv files.
 #
 # Usage: ./remove_auto_ann.sh [-e EXPERIMENT] [-s SUBJECT] [-n SESSION]
 #   -e EXPERIMENT   Only process this experiment (e.g. ltpFR3)
@@ -52,15 +54,25 @@ if [ ! -d "$SEARCH_PATH" ]; then
     exit 1
 fi
 
-# If only subject specified (no experiment), search all experiments for that subject
-if [ -n "$SUBJECT" ] && [ -z "$EXPERIMENT" ]; then
-    FIND_CMD=(find "$SEARCH_PATH" -path "*/$SUBJECT/*/AUTOMATED_ANNOT")
-else
-    FIND_CMD=(find "$SEARCH_PATH" -name AUTOMATED_ANNOT)
-fi
+# Check if a directory is an auto-annotated session
+is_auto_annotated() {
+    local dir="$1"
+    # Check for AUTOMATED_ANNOT marker
+    [ -f "$dir/AUTOMATED_ANNOT" ] && return 0
+    # Check for model output csv files
+    for out_dir in whisperx_out whisper_out assemblyai_out; do
+        if [ -d "$dir/$out_dir" ] && ls "$dir/$out_dir"/*.csv &>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
 
-"${FIND_CMD[@]}" | while read -r marker; do
-    dir="$(dirname "$marker")"
+process_session() {
+    local dir="$1"
+    if ! is_auto_annotated "$dir"; then
+        return
+    fi
 
     echo "Processing: $dir"
 
@@ -82,7 +94,21 @@ fi
         fi
     done
 
-    # Remove the marker file itself
-    echo "  Removing marker: $marker"
-    rm "$marker"
-done
+    # Remove the marker file if present
+    if [ -f "$dir/AUTOMATED_ANNOT" ]; then
+        echo "  Removing marker: $dir/AUTOMATED_ANNOT"
+        rm "$dir/AUTOMATED_ANNOT"
+    fi
+}
+
+# Find session directories and process them
+if [ -n "$SUBJECT" ] && [ -z "$EXPERIMENT" ]; then
+    # Subject only: search all experiments for that subject
+    find "$SEARCH_PATH" -type d -path "*/$SUBJECT/session_*" | while read -r dir; do
+        process_session "$dir"
+    done
+else
+    find "$SEARCH_PATH" -type d -name "session_*" | while read -r dir; do
+        process_session "$dir"
+    done
+fi
