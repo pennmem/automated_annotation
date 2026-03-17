@@ -58,19 +58,25 @@ fi
 is_auto_annotated() {
     local dir="$1"
     # Check for AUTOMATED_ANNOT marker
-    [ -f "$dir/AUTOMATED_ANNOT" ] && return 1
+    [ -f "$dir/AUTOMATED_ANNOT" ] && return 0
     # Remanant of old system which uses model_out.csv as indicator fo automation
     # for out_dir in whisperx_out whisper_out assemblyai_out; do
     #     if [ -d "$dir/$out_dir" ] && ls "$dir/$out_dir"/*.csv &>/dev/null; then
     #         return 1
     #     fi
     # done
-    return 0
+    return 1
 }
 
 process_session() {
     local dir="$1"
     if ! is_auto_annotated "$dir"; then
+        return
+    fi
+
+    # Skip if session has .par files (human-annotated)
+    if ls "$dir"/*.par &>/dev/null; then
+        echo "Skipping (has .par files): $dir"
         return
     fi
 
