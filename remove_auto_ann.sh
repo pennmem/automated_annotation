@@ -1,42 +1,77 @@
 #!/bin/bash
-# Remove auto-generated .ann files from session directories that contain whisperx* files.
-# Also removes the corresponding .ann files from the parse_files SVN working copy and commits.
+# Remove auto-generated .ann files from session directories that contain
+# an AUTOMATED_ANNOT marker file.
 #
-# Usage: ./remove_auto_ann.sh [ROOT_DIR] [PARSE_FILES_DIR]
-#   ROOT_DIR        defaults to /data/eeg/scalp/ltp
-#   PARSE_FILES_DIR defaults to ~/parse_files
+# Usage: ./remove_auto_ann.sh [-e EXPERIMENT] [-s SUBJECT] [-n SESSION]
+#   -e EXPERIMENT   Only process this experiment (e.g. ltpFR3)
+#   -s SUBJECT      Only process this subject (e.g. LTP123)
+#   -n SESSION      Only process this session number (requires -e and -s)
+#
+# Examples:
+#   ./remove_auto_ann.sh                         # all sessions
+#   ./remove_auto_ann.sh -e ltpFR3               # all subjects in ltpFR3
+#   ./remove_auto_ann.sh -s LTP123               # LTP123 across all experiments
+#   ./remove_auto_ann.sh -e ltpFR3 -s LTP123     # LTP123 in ltpFR3 only
+#   ./remove_auto_ann.sh -e ltpFR3 -s LTP123 -n 0  # specific session
 
-ROOT="${1:-/data/eeg/scalp/ltp}"
-PARSE_FILES_DIR="${2:-$HOME/parse_files}"
+ROOT="/data/eeg/scalp/ltp"
+EXPERIMENT=""
+SUBJECT=""
+SESSION=""
 
-removed_pf=()
-
-find "$ROOT" -type d | while read -r dir; do
-    if ls "$dir"/whisperx* &>/dev/null 2>&1; then
-        ann_files=("$dir"/*.ann)
-        if [ -e "${ann_files[0]}" ]; then
-            echo "Removing .ann files in: $dir"
-            rm "${ann_files[@]}"
-
-            # Mirror removal into parse_files SVN working copy
-            rel="$(realpath --relative-to="$ROOT" "$dir")"
-            pf_dir="$PARSE_FILES_DIR/$rel"
-            if [ -d "$pf_dir" ]; then
-                pf_ann_files=("$pf_dir"/*.ann)
-                if [ -e "${pf_ann_files[0]}" ]; then
-                    echo "  svn delete .ann files in: $pf_dir"
-                    svn delete "${pf_ann_files[@]}"
-                fi
-            fi
-        fi
-    fi
+while getopts "e:s:n:" opt; do
+    case "$opt" in
+        e) EXPERIMENT="$OPTARG" ;;
+        s) SUBJECT="$OPTARG" ;;
+        n) SESSION="$OPTARG" ;;
+        *)
+            echo "Usage: $0 [-e EXPERIMENT] [-s SUBJECT] [-n SESSION]"
+            exit 1
+            ;;
+    esac
 done
 
-# Commit all deletions in one pass
-if svn status "$PARSE_FILES_DIR" | grep -q '^D'; then
-    echo "Committing SVN deletions in $PARSE_FILES_DIR ..."
-    svn commit "$PARSE_FILES_DIR" -m "Remove auto-generated .ann files (whisperx* present)"
-    echo "SVN commit done."
-else
-    echo "No SVN deletions to commit."
+# Session requires both experiment and subject
+if [ -n "$SESSION" ] && { [ -z "$EXPERIMENT" ] || [ -z "$SUBJECT" ]; }; then
+    echo "Error: -n SESSION requires both -e EXPERIMENT and -s SUBJECT"
+    exit 1
 fi
+
+# Build the search path
+SEARCH_PATH="$ROOT"
+if [ -n "$EXPERIMENT" ] && [ -n "$SUBJECT" ] && [ -n "$SESSION" ]; then
+    SEARCH_PATH="$ROOT/$EXPERIMENT/$SUBJECT/session_$SESSION"
+elif [ -n "$EXPERIMENT" ] && [ -n "$SUBJECT" ]; then
+    SEARCH_PATH="$ROOT/$EXPERIMENT/$SUBJECT"
+elif [ -n "$EXPERIMENT" ]; then
+    SEARCH_PATH="$ROOT/$EXPERIMENT"
+fi
+
+if [ ! -d "$SEARCH_PATH" ]; then
+    echo "Error: directory not found: $SEARCH_PATH"
+    exit 1
+fi
+
+# If only subject specified (no experiment), search all experiments for that subject
+if [ -n "$SUBJECT" ] && [ -z "$EXPERIMENT" ]; then
+    FIND_CMD=(find "$SEARCH_PATH" -path "*/$SUBJECT/*/AUTOMATED_ANNOT")
+else
+    FIND_CMD=(find "$SEARCH_PATH" -name AUTOMATED_ANNOT)
+fi
+
+"${FIND_CMD[@]}" | while read -r marker; do
+    dir="$(dirname "$marker")"
+
+    echo "Processing: $dir"
+
+    # Remove .ann files
+    ann_files=("$dir"/*.ann)
+    if [ -e "${ann_files[0]}" ]; then
+        echo "  Removing .ann files"
+        rm "${ann_files[@]}"
+    fi
+
+    # Remove the marker file itself
+    echo "  Removing marker: $marker"
+    rm "$marker"
+done
