@@ -71,6 +71,17 @@ fi
         rm "${ann_files[@]}"
     fi
 
+    # Remove .csv files from model output subdirectories
+    for out_dir in whisperx_out whisper_out assemblyai_out; do
+        if [ -d "$dir/$out_dir" ]; then
+            csv_files=("$dir/$out_dir"/*.csv)
+            if [ -e "${csv_files[0]}" ]; then
+                echo "  Removing .csv files in: $dir/$out_dir"
+                rm "${csv_files[@]}"
+            fi
+        fi
+    done
+
     # Remove the marker file itself
     echo "  Removing marker: $marker"
     rm "$marker"
