@@ -58,14 +58,14 @@ fi
 is_auto_annotated() {
     local dir="$1"
     # Check for AUTOMATED_ANNOT marker
-    [ -f "$dir/AUTOMATED_ANNOT" ] && return 0
+    [ -f "$dir/AUTOMATED_ANNOT" ] && return 1
     # Check for model output csv files
     for out_dir in whisperx_out whisper_out assemblyai_out; do
         if [ -d "$dir/$out_dir" ] && ls "$dir/$out_dir"/*.csv &>/dev/null; then
-            return 0
+            return 1
         fi
     done
-    return 1
+    return 0
 }
 
 process_session() {
