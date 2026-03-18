@@ -145,7 +145,7 @@ def _annotate_worker(session_dir: str, backend_name: str, model_name: str,
 
     from automated_annot import run_transcription
     from backends import get_backend
-    from csv_to_ann import csv_to_ann
+    from converters import csv_to_ann
 
     wav_files = sorted(
         f for f in glob.glob(os.path.join(session_dir, '*.wav'))

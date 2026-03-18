@@ -5,33 +5,64 @@
 # whisper_out, assemblyai_out) with .csv files.
 #
 # Usage: ./remove_auto_ann.sh [-e EXPERIMENT] [-s SUBJECT] [-n SESSION]
+#                             [-c] [-a] [-p] [-P]
 #   -e EXPERIMENT   Only process this experiment (e.g. ltpFR3)
 #   -s SUBJECT      Only process this subject (e.g. LTP123)
 #   -n SESSION      Only process this session number (requires -e and -s)
+#   -c              Remove .csv files from model output subdirectories
+#   -a              Remove .ann files
+#   -p              Also delete .par files (instead of skipping sessions with them)
+#   -P              Ignore .par files (don't skip sessions that have them, but don't delete them)
+#
+#   If neither -c nor -a is given, both are removed (default behavior).
 #
 # Examples:
-#   ./remove_auto_ann.sh                         # all sessions
+#   ./remove_auto_ann.sh                         # all sessions, remove .ann + .csv
 #   ./remove_auto_ann.sh -e ltpFR3               # all subjects in ltpFR3
 #   ./remove_auto_ann.sh -s LTP123               # LTP123 across all experiments
 #   ./remove_auto_ann.sh -e ltpFR3 -s LTP123     # LTP123 in ltpFR3 only
 #   ./remove_auto_ann.sh -e ltpFR3 -s LTP123 -n 0  # specific session
+#   ./remove_auto_ann.sh -c                      # only remove .csv files
+#   ./remove_auto_ann.sh -a                      # only remove .ann files
+#   ./remove_auto_ann.sh -p                      # also delete .par files
+#   ./remove_auto_ann.sh -P                      # ignore .par files (don't skip, don't delete)
 
 ROOT="/data/eeg/scalp/ltp"
 EXPERIMENT=""
 SUBJECT=""
 SESSION=""
+RM_CSV=0
+RM_ANN=0
+RM_PAR=0        # -p: delete .par files
+IGNORE_PAR=0    # -P: ignore .par files (don't skip, don't delete)
 
-while getopts "e:s:n:" opt; do
+while getopts "e:s:n:capP" opt; do
     case "$opt" in
         e) EXPERIMENT="$OPTARG" ;;
         s) SUBJECT="$OPTARG" ;;
         n) SESSION="$OPTARG" ;;
+        c) RM_CSV=1 ;;
+        a) RM_ANN=1 ;;
+        p) RM_PAR=1 ;;
+        P) IGNORE_PAR=1 ;;
         *)
-            echo "Usage: $0 [-e EXPERIMENT] [-s SUBJECT] [-n SESSION]"
+            echo "Usage: $0 [-e EXPERIMENT] [-s SUBJECT] [-n SESSION] [-c] [-a] [-p] [-P]"
             exit 1
             ;;
     esac
 done
+
+# Default: if neither -c nor -a specified, remove both
+if [ "$RM_CSV" -eq 0 ] && [ "$RM_ANN" -eq 0 ]; then
+    RM_CSV=1
+    RM_ANN=1
+fi
+
+# -p and -P are mutually exclusive
+if [ "$RM_PAR" -eq 1 ] && [ "$IGNORE_PAR" -eq 1 ]; then
+    echo "Error: -p and -P are mutually exclusive"
+    exit 1
+fi
 
 # Session requires both experiment and subject
 if [ -n "$SESSION" ] && { [ -z "$EXPERIMENT" ] || [ -z "$SUBJECT" ]; }; then
@@ -74,31 +105,49 @@ process_session() {
         return
     fi
 
-    # Skip if session has .par files (human-annotated)
+    # Handle .par files
     if ls "$dir"/*.par &>/dev/null; then
-        echo "Skipping (has .par files): $dir"
-        return
+        if [ "$RM_PAR" -eq 1 ]; then
+            echo "  Deleting .par files in: $dir"
+        elif [ "$IGNORE_PAR" -eq 0 ]; then
+            echo "Skipping (has .par files): $dir"
+            return
+        fi
+        # IGNORE_PAR=1: just continue without skipping or deleting
     fi
 
     echo "Processing: $dir"
 
+    # Delete .par files if requested
+    if [ "$RM_PAR" -eq 1 ]; then
+        par_files=("$dir"/*.par)
+        if [ -e "${par_files[0]}" ]; then
+            echo "  Removing .par files"
+            rm "${par_files[@]}"
+        fi
+    fi
+
     # Remove .ann files
-    ann_files=("$dir"/*.ann)
-    if [ -e "${ann_files[0]}" ]; then
-        echo "  Removing .ann files"
-        rm "${ann_files[@]}"
+    if [ "$RM_ANN" -eq 1 ]; then
+        ann_files=("$dir"/*.ann)
+        if [ -e "${ann_files[0]}" ]; then
+            echo "  Removing .ann files"
+            rm "${ann_files[@]}"
+        fi
     fi
 
     # Remove .csv files from model output subdirectories
-    for out_dir in whisperx_out whisper_out assemblyai_out; do
-        if [ -d "$dir/$out_dir" ]; then
-            csv_files=("$dir/$out_dir"/*.csv)
-            if [ -e "${csv_files[0]}" ]; then
-                echo "  Removing .csv files in: $dir/$out_dir"
-                rm "${csv_files[@]}"
+    if [ "$RM_CSV" -eq 1 ]; then
+        for out_dir in whisperx_out whisper_out assemblyai_out; do
+            if [ -d "$dir/$out_dir" ]; then
+                csv_files=("$dir/$out_dir"/*.csv)
+                if [ -e "${csv_files[0]}" ]; then
+                    echo "  Removing .csv files in: $dir/$out_dir"
+                    rm "${csv_files[@]}"
+                fi
             fi
-        fi
-    done
+        done
+    fi
 
     # Remove the marker file if present
     if [ -f "$dir/AUTOMATED_ANNOT" ]; then
