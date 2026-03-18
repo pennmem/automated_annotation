@@ -15,7 +15,8 @@
       "Bash(chmod +x /home1/zrentala/automated_annotation/remove_auto_ann.sh)",
       "WebFetch(domain:pmc.ncbi.nlm.nih.gov)",
       "Read(//home1/zrentala/parse_files/VCBehOnly/LTP627/session_3/**)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(git stash:*)"
     ]
   }
 }

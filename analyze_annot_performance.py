@@ -307,7 +307,7 @@ def run_confidence_analysis(df, verbose=False):
         print(result)
     return result
 
-
+### BROKEN NEED TO CHECK
 def run_regression_analysis(df, verbose=False):
     """Linear regression between predicted and manual (GT) onsets.
 
@@ -349,7 +349,7 @@ def run_regression_analysis(df, verbose=False):
         'n':         len(gt_onset),
     }
 
-
+### BROKEN NEED TO CHECK
 def compute_regression_residuals(df):
     """Add a 'RegressionResidual' column to df.
 
@@ -370,7 +370,7 @@ def compute_regression_residuals(df):
     df['RegressionResidual'] = predicted_manual - gt_onset
     return df
 
-
+### BROKEN NEED TO CHECK
 def run_roc_analysis(roc_trials, thresholds=None, verbose=False):
     """Compute ROC curve for word identification accuracy.
 
@@ -444,7 +444,7 @@ def run_roc_analysis(roc_trials, thresholds=None, verbose=False):
 
     return roc_df, auc
 
-
+### BROKEN NEED TO CHECK
 def run_onset_correlation_analysis(df, verbose=False):
     """Correlate predicted vs manual onset times at three levels.
 
