@@ -307,7 +307,7 @@ class AssemblyAIBackend(TranscriptionBackend):
             punctuate=False,
             format_text=False,
             language_code="en",
-        )
+        ) 
         self.transcriber = aai.Transcriber(config=config)
 
     def transcribe_file(self, filepath, smokescreen, args, context=None):

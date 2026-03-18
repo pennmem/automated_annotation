@@ -16,7 +16,10 @@
       "WebFetch(domain:pmc.ncbi.nlm.nih.gov)",
       "Read(//home1/zrentala/parse_files/VCBehOnly/LTP627/session_3/**)",
       "Read(//tmp/**)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(find results/base-assembly-up3/data -name *.csv -path *assemblyai*)",
+      "Bash(find results/base-assembly-up3/data -type d -name *_out)",
+      "Bash(/home1/zrentala/.conda/envs/annotate_np1/bin/python -c \":*)"
     ]
   }
 }
