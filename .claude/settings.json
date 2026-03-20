@@ -23,7 +23,13 @@
       "Bash(find / -name \"ann2par.py\" 2)",
       "Bash(/dev/null -maxdepth 6)",
       "Bash(locate ann2par.py)",
-      "Read(//home1/maint/**)"
+      "Read(//home1/maint/**)",
+      "Bash(for i:*)",
+      "Bash(do echo:*)",
+      "Read(//home1/zrentala/automated_annotation/results/base-whisperx/annotation_gauntlet/session_0/whisperx_out/**)",
+      "Bash(done)",
+      "Read(//home1/zrentala/automated_annotation/dependencies/annotation_gauntlet/session_0/**)",
+      "Bash(python vocalization_processor.py)"
     ]
   }
 }

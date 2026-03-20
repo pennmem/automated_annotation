@@ -1,0 +1,20 @@
+I want you to act as a vocalization identification model where you identify vocalizations (any word that is not a guess) and mark them as <> in the automated annotaitons.
+
+i want you to first try this onthe results of the annotation gauntlet here: results/base-whisperx/annotation_gauntlet/session_0/whisperx_out/
+
+The path to the wordpool is here: dependencies/annotation_gauntlet/RAM_wordpool.txt
+The path to the lsts are here: dependencies/annotation_gauntlet/session_0/
+
+For each of the csvs, I want you to check against these rules:
+- Filler word: Any filler words like um, ah, uh, okay, no, mmmmhh etc. are vocalizations, but check wordpool first to see if it is in the wordpool 
+- Sentence: Any words in a sentence that are not guesses should be counted as a single vocalization which begins on the first word of the sentence. Count each sentence separately even if they are clsoe to each other in onset
+
+If any of the above conidtions are met, replace teh event  as a vocalization by putting "<>"
+ in word column, keep onset, offset, probability, and add type column and fill it in with "Filler" or "Sentence" respectively
+
+- Extension: If a word or vocalization lasts more than 1 seconds then add a <> mark/event at 1s after 
+the onset of the onset. use LongDurationVocalization in post processing.py to mark, but add type column with name "Extension"
+
+Save copies of the csvs in results/whisperx-claude-focused/annotation_gauntlet/session_0/whisperx_out
+
+Can you create a txt file for each annotation you edit saved in the same folder on your reaosning, then also output any patterns you recognize that didnt mention
