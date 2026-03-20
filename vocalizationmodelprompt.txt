@@ -1,3 +1,4 @@
+0.
 I want you to act as a vocalization identification model where you identify vocalizations (any word that is not a guess) and mark them as <> in the automated annotaitons.
 
 i want you to first try this onthe results of the annotation gauntlet here: results/base-whisperx/annotation_gauntlet/session_0/whisperx_out/
@@ -18,3 +19,51 @@ the onset of the onset. use LongDurationVocalization in post processing.py to ma
 Save copies of the csvs in results/whisperx-claude-focused/annotation_gauntlet/session_0/whisperx_out
 
 Can you create a txt file for each annotation you edit saved in the same folder on your reaosning, then also output any patterns you recognize that didnt mention
+
+1.
+Okay now we let's review the reasoning and the patterns.
+
+First with the patterns:
+Suffix variants, ignore this for now we have code in postprocessing to handle this
+Semantic near misses, also ignore this, we have code in post procesisng
+Experimenter speech: We shoudl not record this event at all, we only record the participant
+self commentary: this was done will
+repeated recall attempts: these are just guesses
+
+Can you make the type column log the pattern as indicated in patterns
+
+Now let's go over reasoning:
+2.
+Row 2: 'BLUE' -> Single non-wordpool word, marked as Filler
+Row 5: 'BLUE' -> Single non-wordpool word, marked as Filler
+Row 21: 'BLUE' -> Single non-wordpool word, marked as Filler
+Dont mark these as fillers, this is an intrusion just keep it the same and mark type as intrusion
+
+3.
+Rows 6-16: 'BADGER OH I DONT I DONT KNOW IF IT WAS BADGER' -> Sentence vocalization
+Both badgers count as a guess, the rest is a sentence vocalization
+
+Row 18: 'ICES' -> Single non-wordpool word, marked as Filler
+Row 19: 'CHAIN' -> Single non-wordpool word, marked as Filler
+Row 20: 'CHAIN' -> Single non-wordpool word, marked as Filler
+Row 22: 'CHAIN' -> Single non-wordpool word, marked as Filler
+these are intrusions (we may have to do semantic similarity later)
+
+4.
+Row 4: 'SAND' -> Single non-wordpool word, marked as Filler
+Intrusion
+
+5.
+Rows 6-22: 'IS THIS NORMAL WITH PEOPLE USUALLY NO YOURE DOING GREAT YOURE GETTING A LOT OF GOOD NOTES' -> Sentence vocalization
+This shoudl be two people: IS THIS NORMAL WITH PEOPLE USUALLY (participant), NO YOURE DOING GREAT YOURE GETTING A LOT OF GOOD NOTES(epxerimenter), we only log the participant
+
+7.
+Row 2: 'GLASSES' -> Single non-wordpool word, marked as Filler
+Row 4: 'MATTRESS' -> Single non-wordpool word, marked as Filler
+intrusions
+
+11.
+Row 2: 'COP' -> Single non-wordpool word, marked as Filler
+this is semantic similairty with cup
+
+Can you edit the code and rerun the vocalizaiton model using the above changes and corrections? Put new results in results/whisperx-claude-focused-1
