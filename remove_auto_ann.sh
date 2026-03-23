@@ -105,6 +105,12 @@ process_session() {
         return
     fi
 
+    # Skip sessions that have been corrected via parsync
+    if [ -f "$dir/CORRECTED_ANNOT" ]; then
+        echo "Skipping (corrected annotations): $dir"
+        return
+    fi
+
     # Handle .par files
     if ls "$dir"/*.par &>/dev/null; then
         if [ "$RM_PAR" -eq 1 ]; then
@@ -136,7 +142,7 @@ process_session() {
         fi
     fi
 
-    # Remove .csv files from model output subdirectories
+    # Remove .csv files from model output subdirectories and session directory
     if [ "$RM_CSV" -eq 1 ]; then
         for out_dir in whisperx_out whisper_out assemblyai_out; do
             if [ -d "$dir/$out_dir" ]; then
@@ -147,6 +153,12 @@ process_session() {
                 fi
             fi
         done
+        # Also remove auto_whisperx_*.csv files in the session directory itself
+        auto_csv_files=("$dir"/auto_whisperx_*.csv)
+        if [ -e "${auto_csv_files[0]}" ]; then
+            echo "  Removing auto_whisperx_*.csv files in: $dir"
+            rm "${auto_csv_files[@]}"
+        fi
     fi
 
     # Remove the marker file if present

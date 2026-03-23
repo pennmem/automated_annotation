@@ -67,3 +67,10 @@ Row 2: 'COP' -> Single non-wordpool word, marked as Filler
 this is semantic similairty with cup
 
 Can you edit the code and rerun the vocalizaiton model using the above changes and corrections? Put new results in results/whisperx-claude-focused-1
+
+3.
+run the output rules for vocalilzation classification and longduration on 200 of the top vocalization number sessions in ltpfr2 which is found here 'intrusion_exploration/ltpfr2_summary_sorted.csv'
+
+put the reuslts in results/whisperx-claude-ltpfr2/annotation_gauntlet
+
+i also want get more patterns you notice while running this. finally you shoudl comapre the vocalizations accuracy with the ground truth data. Get summary stats: ie accuracy, number of each type of vocalizaiton, percentrage etc (then right this code out in the explore intrusions notebook)

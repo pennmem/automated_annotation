@@ -65,16 +65,21 @@ class SuffixStripping(OutputRule):
             return df
         wp_set = set(w.upper() for w in wordpool)
         df = df.copy()
-        df['Word'] = df['Word'].apply(lambda w: self._strip(w.upper(), wp_set))
+        df['Word'] = df['Word'].apply(lambda w: self._strip(str(w).strip().upper(), wp_set))
         return df
 
     @staticmethod
     def _strip(upper, wp_set):
         if upper in wp_set:
             return upper
-        for suffix, strip_len in [('S', 1), ('ES', 2), ('ED', 2)]:
+        # Strip suffix from ASR word to match wordpool (KEYS -> KEY)
+        for suffix, strip_len in [('S', 1), ('ES', 2), ('ED', 2), ('TE', 2)]:
             if upper.endswith(suffix) and upper[:-strip_len] in wp_set:
                 return upper[:-strip_len]
+        # Add suffix to ASR word to match wordpool (SCISSOR -> SCISSORS)
+        for suffix in ['S', 'ES']:
+            if (upper + suffix) in wp_set:
+                return upper + suffix
         return upper
 
 
@@ -229,12 +234,15 @@ class LongDurationVocalization(OutputRule):
                     # Add <> marks at each full second after onset
                     t = onset + self.MAX_DURATION_MS
                     while t <= offset:
-                        new_rows.append({
+                        ext = {
                             'Word': '<>',
                             'Onset': int(t),
                             'Offset': int(min(t + self.MAX_DURATION_MS, offset)),
                             'Probability': row['Probability'],
-                        })
+                        }
+                        if 'Type' in df.columns:
+                            ext['Type'] = 'Extension'
+                        new_rows.append(ext)
                         t += self.MAX_DURATION_MS
         return pd.DataFrame(new_rows)
 
@@ -305,6 +313,458 @@ class EmptyVocalization(OutputRule):
         }])
 
 
+# ─── Vocalization classification constants ──────────────────────────────────
+
+FILLER_WORDS = {
+    'UM', 'UH', 'AH', 'OH', 'OKAY', 'OK', 'YEAH', 'YES', 'NO', 'HM',
+    'HMM', 'HMMM', 'MMM', 'MMMHH', 'RIGHT', 'WELL', 'SO', 'LIKE',
+    'HELLO', 'HI', 'HEY', 'SORRY', 'NOW',
+    'OM', 'AHEM', 'PFFT', 'BYE', 'THANKS', 'THANK', 'HUH', 'GOD',
+    'DAMN', 'SHIT',
+}
+
+NOISE_WORDS = {
+    'COUGH', 'INHALE', 'EXHALE', 'BEEP', 'SNEEZE', 'SIGH', 'GASP',
+    'SNIFF', 'HICCUP', 'CLICK', 'BUZZ', 'STATIC', 'NOISE',
+    'BREATHING', 'BREATH', 'GRUNT', 'GROAN', 'SNORE', 'YAWN',
+}
+
+SENTENCE_WORDS = {
+    'I', 'IM', 'A', 'AN', 'THE', 'IS', 'IT', 'ITS', 'IN', 'ON', 'OF', 'TO',
+    'DO', 'DONT', 'DID', 'DIDNT', 'WAS', 'WASNT', 'WERE', 'WERENT',
+    'CAN', 'CANT', 'COULD', 'COULDNT', 'WILL', 'WONT', 'WOULD', 'WOULDNT',
+    'SHOULD', 'SHOULDNT', 'HAVE', 'HAS', 'HAD', 'HAVENT', 'HASNT',
+    'NOT', 'BUT', 'AND', 'OR', 'IF', 'THEN', 'THAT', 'THATS', 'THIS',
+    'WHAT', 'WHERE', 'WHEN', 'WHY', 'HOW', 'WHO', 'WHICH',
+    'FOR', 'WITH', 'FROM', 'AT', 'BY', 'ABOUT', 'INTO',
+    'JUST', 'REALLY', 'VERY', 'SOME', 'ANY', 'ALL', 'EVERY',
+    'MY', 'YOUR', 'YOURE', 'HIS', 'HER', 'OUR', 'THEIR',
+    'ME', 'YOU', 'HE', 'SHE', 'WE', 'THEY', 'ONE',
+    'KNOW', 'THINK', 'FEEL', 'REMEMBER', 'WANT', 'NEED', 'TRY',
+    'TRYING', 'DOING', 'GOING', 'GETTING', 'SURE', 'ACTUALLY',
+    'KEEP', 'TRACK', 'TURN', 'OFF', 'NORMAL', 'PEOPLE', 'USUALLY',
+    'HARD', 'GOOD', 'GREAT', 'FINE', 'BACK', 'THERE',
+    'MATH', 'LUNCH', 'SORRY', 'ABOUT', 'COME',
+    'STAY', 'BREAK', 'MAYBE', 'GO', 'SAID', 'WATCHING', 'MEET',
+    'ALREADY', 'LAST', 'UP', 'LOVE', 'SWEET', 'SHORT',
+    'RATHER', 'MOMMY', 'MR', 'NAN',
+}
+
+EXPERIMENTER_PHRASES = [
+    ['RECALL', 'ALL', 'THE', 'WORDS'],
+    ['WORDS', 'YOU', 'CAN', 'REMEMBER'],
+    ['YOURE', 'DOING', 'GREAT'],
+    ['YOURE', 'GETTING'],
+    ['LOT', 'OF', 'GOOD', 'NOTES'],
+    ['COME', 'IN', 'ITS', 'OKAY'],
+    ['COME', 'IN', 'ITS'],
+    ['COME', 'IN'],
+    ['COME', 'BACK'],
+    ['ITS', 'OKAY', 'COME'],
+    ['KEEP', 'TRYING', 'TO', 'REMEMBER'],
+    ['JUST', 'KEEP', 'TRYING'],
+    ['THATS', 'FINE', 'JUST', 'KEEP'],
+    ['WANTED', 'TO', 'CHECK'],
+    ['WANTED', 'FOR', 'LUNCH'],
+    ['CAN', 'TURN', 'IT', 'OFF'],
+]
+
+PARTICIPANT_PHRASES = [
+    ['I', 'DONT'], ['I', 'JUST'], ['I', 'CANT'], ['IM', 'SURE'],
+    ['IS', 'THIS', 'NORMAL'],
+]
+
+
+# ─── Shared helpers ─────────────────────────────────────────────────────────
+
+def _contains_phrases(words, phrases):
+    """Return True if any phrase from *phrases* appears in *words*."""
+    for phrase in phrases:
+        plen = len(phrase)
+        for start in range(len(words) - plen + 1):
+            if words[start:start + plen] == phrase:
+                return True
+    return False
+
+
+def _find_phrase_ranges(words, phrases):
+    """Return list of (start, end) index ranges where phrases match in *words*."""
+    ranges = []
+    for phrase in phrases:
+        plen = len(phrase)
+        for start in range(len(words) - plen + 1):
+            if words[start:start + plen] == phrase:
+                ranges.append((start, start + plen))
+    return ranges
+
+
+def _is_sentence_word(word):
+    """True if *word* is a common English word, not a guess attempt."""
+    w = word.upper()
+    return w in SENTENCE_WORDS or w in FILLER_WORDS
+
+
+def _word_upper(row):
+    """Safely extract uppercase word from a row."""
+    return str(row['Word']).strip().upper()
+
+
+def _group_non_wordpool_runs(df, wp_set, filler_set,
+                             sentence_gap_ms=1000, filler_gap_ms=300):
+    """Yield (start, end) index tuples of consecutive non-wordpool row runs."""
+    n = len(df)
+    i = 0
+    while i < n:
+        w = _word_upper(df.iloc[i])
+        if w in wp_set:
+            i += 1
+            continue
+        run_start = i
+        j = i
+        while j < n:
+            wj = _word_upper(df.iloc[j])
+            if wj in wp_set:
+                break
+            if j > run_start:
+                gap = df.iloc[j]['Onset'] - df.iloc[j - 1]['Offset']
+                if gap > sentence_gap_ms:
+                    break
+                if wj in filler_set and gap > filler_gap_ms:
+                    break
+            j += 1
+        yield (run_start, j)
+        i = j
+
+
+# ─── Vocalization sub-rules ─────────────────────────────────────────────────
+
+class BreathingNoiseDetection(OutputRule):
+    """Mark ASR-transcribed breathing and noise artifacts as vocalizations.
+
+    Any word matching NOISE_WORDS (COUGH, INHALE, EXHALE, BEEP, etc.)
+    becomes ``<>`` with ``Type='Noise'``.
+    """
+
+    def apply(self, df, context):
+        wp_set = set(w.upper() for w in (context.get('wordpool') or []))
+        noise_set = NOISE_WORDS - wp_set
+        df = df.copy()
+        if 'Type' not in df.columns:
+            df['Type'] = ''
+        for i in range(len(df)):
+            t = str(df.at[df.index[i], 'Type']).strip()
+            if t and t != 'nan':
+                continue
+            w = _word_upper(df.iloc[i])
+            if w in noise_set:
+                df.at[df.index[i], 'Word'] = '<>'
+                df.at[df.index[i], 'Type'] = 'Noise'
+        return df
+
+
+class FillerDetection(OutputRule):
+    """Mark standalone filler words (um, uh, okay, …) as vocalizations.
+
+    Filler words not in the wordpool become ``<>`` with ``Type='Filler'``.
+    """
+
+    def apply(self, df, context):
+        wp_set = set(w.upper() for w in (context.get('wordpool') or []))
+        filler_set = FILLER_WORDS - wp_set
+        df = df.copy()
+        if 'Type' not in df.columns:
+            df['Type'] = ''
+        for i in range(len(df)):
+            t = str(df.at[df.index[i], 'Type']).strip()
+            if t and t != 'nan':
+                continue
+            w = _word_upper(df.iloc[i])
+            if w in filler_set:
+                df.at[df.index[i], 'Word'] = '<>'
+                df.at[df.index[i], 'Type'] = 'Filler'
+        return df
+
+
+class ExperimenterSpeechFilter(OutputRule):
+    """Detect and mark experimenter speech for removal.
+
+    Multi-word runs are scanned for EXPERIMENTER_PHRASES. Matched spans
+    (plus surrounding non-participant words) are marked ``Type='Experimenter'``.
+    The orchestrating VocalizationClassifier drops these rows.
+
+    Also handles manual ``experimenter_overrides`` from context.
+    """
+
+    SENTENCE_GAP_MS = 1000
+
+    def apply(self, df, context):
+        wp_set = set(w.upper() for w in (context.get('wordpool') or []))
+        filler_set = FILLER_WORDS - wp_set
+        df = df.copy()
+        if 'Type' not in df.columns:
+            df['Type'] = ''
+
+        # Manual overrides
+        exp_overrides = context.get('experimenter_overrides', {})
+        list_num = context.get('list_num')
+        override_rows = exp_overrides.get(list_num, set()) if list_num is not None else set()
+        for i in range(len(df)):
+            if i in override_rows:
+                df.at[df.index[i], 'Type'] = 'Experimenter'
+
+        # Phrase-based detection on non-wordpool runs
+        for run_s, run_e in _group_non_wordpool_runs(df, wp_set, filler_set):
+            words = [_word_upper(df.iloc[k]) for k in range(run_s, run_e)]
+            if len(words) < 2:
+                continue
+            segments = self._split(df, run_s, run_e, words)
+            for seg_type, seg_s, seg_e in segments:
+                if seg_type == 'experimenter':
+                    for k in range(seg_s, seg_e):
+                        df.at[df.index[k], 'Type'] = 'Experimenter'
+        return df
+
+    def _split(self, df, start, end, words):
+        upper = [w.upper() for w in words]
+        if _contains_phrases(upper, EXPERIMENTER_PHRASES) and not _contains_phrases(upper, PARTICIPANT_PHRASES):
+            return [('experimenter', start, end)]
+
+        exp_ranges = _find_phrase_ranges(upper, EXPERIMENTER_PHRASES)
+        if not exp_ranges:
+            return [('participant', start, end)]
+
+        exp_ranges.sort()
+        merged = [list(exp_ranges[0])]
+        for s, e in exp_ranges[1:]:
+            if s <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], e)
+            else:
+                merged.append([s, e])
+
+        for mi, (s, e) in enumerate(merged):
+            while e < len(upper):
+                actual = start + e
+                if actual >= len(df):
+                    break
+                gap = df.iloc[actual]['Onset'] - df.iloc[actual - 1]['Offset']
+                if gap > self.SENTENCE_GAP_MS:
+                    break
+                if _contains_phrases(upper[e:], PARTICIPANT_PHRASES):
+                    break
+                e += 1
+            while s > 0 and upper[s - 1] in FILLER_WORDS:
+                s -= 1
+            merged[mi] = [s, e]
+
+        merged.sort()
+        final = [merged[0]]
+        for s, e in merged[1:]:
+            if s <= final[-1][1]:
+                final[-1][1] = max(final[-1][1], e)
+            else:
+                final.append([s, e])
+
+        segments = []
+        pos = 0
+        for exp_s, exp_e in final:
+            if pos < exp_s:
+                segments.append(('participant', start + pos, start + exp_s))
+            segments.append(('experimenter', start + exp_s, start + exp_e))
+            pos = exp_e
+        if pos < len(upper):
+            segments.append(('participant', start + pos, start + len(upper)))
+        return segments
+
+
+class SentenceDetection(OutputRule):
+    """Group consecutive common English words into sentence vocalizations.
+
+    Multi-word participant speech (non-wordpool, non-filler, non-noise) where
+    each word is in SENTENCE_WORDS gets merged into a single ``<>`` event
+    with ``Type='Sentence'``. Intrusion-looking words within a sentence are
+    extracted and left for IntrusionClassification.
+    """
+
+    def apply(self, df, context):
+        wp_set = set(w.upper() for w in (context.get('wordpool') or []))
+        filler_set = FILLER_WORDS - wp_set
+        df = df.copy()
+        if 'Type' not in df.columns:
+            df['Type'] = ''
+
+        for run_s, run_e in _group_non_wordpool_runs(df, wp_set, filler_set):
+            # Skip runs already fully typed (experimenter, noise, filler)
+            untyped = [k for k in range(run_s, run_e)
+                       if str(df.at[df.index[k], 'Type']).strip() in ('', 'nan')]
+            if len(untyped) < 2:
+                continue
+
+            # Check if this is a multi-word sentence span
+            sentence_parts = []
+            for k in untyped:
+                w = _word_upper(df.iloc[k])
+                if _is_sentence_word(w):
+                    sentence_parts.append(k)
+
+            if len(sentence_parts) < 2:
+                continue
+
+            # Group consecutive sentence parts
+            groups = []
+            current = [sentence_parts[0]]
+            for k in sentence_parts[1:]:
+                if k == current[-1] + 1 or (k - current[-1] == 2 and
+                        str(df.at[df.index[current[-1] + 1], 'Type']).strip() not in ('', 'nan')):
+                    current.append(k)
+                else:
+                    groups.append(current)
+                    current = [k]
+            groups.append(current)
+
+            for group in groups:
+                if len(group) < 2:
+                    # Single sentence word -> mark as Sentence
+                    k = group[0]
+                    w = _word_upper(df.iloc[k])
+                    if w not in filler_set:
+                        df.at[df.index[k], 'Word'] = '<>'
+                        df.at[df.index[k], 'Type'] = 'Sentence'
+                else:
+                    # Merge: keep first row's onset, last row's offset
+                    first, last = group[0], group[-1]
+                    df.at[df.index[first], 'Word'] = '<>'
+                    df.at[df.index[first], 'Offset'] = int(df.iloc[last]['Offset'])
+                    df.at[df.index[first], 'Type'] = 'Sentence'
+                    # Mark rest for removal
+                    for k in group[1:]:
+                        df.at[df.index[k], 'Type'] = '_merged'
+        # Drop merged rows
+        df = df[df['Type'] != '_merged'].reset_index(drop=True)
+        return df
+
+
+class IntrusionClassification(OutputRule):
+    """Mark remaining untyped non-wordpool words as intrusions.
+
+    Catch-all: any row still without a Type that is not in the wordpool
+    gets ``Type='Intrusion'``. Common sentence words get ``Type='Sentence'``
+    and ``Word='<>'`` instead (single-word sentence fragments).
+    """
+
+    def apply(self, df, context):
+        wp_set = set(w.upper() for w in (context.get('wordpool') or []))
+        filler_set = FILLER_WORDS - wp_set
+        df = df.copy()
+        if 'Type' not in df.columns:
+            df['Type'] = ''
+        for i in range(len(df)):
+            t = str(df.at[df.index[i], 'Type']).strip()
+            if t and t != 'nan':
+                continue
+            w = _word_upper(df.iloc[i])
+            if w in wp_set:
+                continue
+            if _is_sentence_word(w):
+                df.at[df.index[i], 'Word'] = '<>'
+                df.at[df.index[i], 'Type'] = 'Filler' if w in filler_set else 'Sentence'
+            else:
+                df.at[df.index[i], 'Type'] = 'Intrusion'
+        return df
+
+
+class ProperNounDetection(OutputRule):
+    """Reclassify intrusions that match known first names as proper nouns.
+
+    Loads a name list from ``dependencies/first_names.txt`` and marks
+    matching Intrusion rows as ``<>`` with ``Type='ProperNoun'``.
+    Names that appear in the wordpool are skipped.
+    """
+
+    _DEFAULT_PATH = os.path.join(os.path.dirname(__file__), 'dependencies', 'first_names.txt')
+
+    def __init__(self, names_path=None):
+        path = names_path or self._DEFAULT_PATH
+        self._names = set()
+        if os.path.exists(path):
+            with open(path) as f:
+                self._names = {line.strip().upper() for line in f if line.strip()}
+
+    def apply(self, df, context):
+        if not self._names:
+            return df
+        wp_set = set(w.upper() for w in (context.get('wordpool') or []))
+        names = self._names - wp_set
+        df = df.copy()
+        for i in range(len(df)):
+            if str(df.at[df.index[i], 'Type']).strip() != 'Intrusion':
+                continue
+            w = _word_upper(df.iloc[i])
+            if w in names:
+                df.at[df.index[i], 'Word'] = '<>'
+                df.at[df.index[i], 'Type'] = 'ProperNoun'
+        return df
+
+
+# ─── Orchestrator ────────────────────────────────────────────────────────────
+
+class VocalizationClassifier(OutputRule):
+    """Orchestrate vocalization sub-rules to classify each ASR word.
+
+    Runs sub-rules in order:
+    1. BreathingNoiseDetection — catch noise tokens first
+    2. FillerDetection — catch filler words
+    3. ExperimenterSpeechFilter — mark experimenter spans
+    4. SentenceDetection — merge sentence runs
+    5. IntrusionClassification — catch-all for remaining
+    6. ProperNounDetection — reclassify name intrusions
+
+    Then drops Experimenter rows and ensures clean output.
+
+    Must run **after** UpperCase / SuffixStripping / SemanticMatch.
+    """
+
+    def __init__(self, disable=None):
+        self._disable = set(disable or [])
+        self._sub_rules = []
+        rule_classes = [
+            ('BreathingNoiseDetection', BreathingNoiseDetection),
+            ('FillerDetection', FillerDetection),
+            ('ExperimenterSpeechFilter', ExperimenterSpeechFilter),
+            ('SentenceDetection', SentenceDetection),
+            ('IntrusionClassification', IntrusionClassification),
+            ('ProperNounDetection', ProperNounDetection),
+        ]
+        for name, cls in rule_classes:
+            if name not in self._disable:
+                self._sub_rules.append(cls())
+
+    def apply(self, df, context):
+        wordpool = context.get('wordpool')
+        if wordpool is None:
+            return df
+
+        df = df.copy()
+        if 'Type' not in df.columns:
+            df['Type'] = ''
+
+        n = len(df)
+        if n == 0:
+            return df
+
+        # Run each sub-rule in sequence
+        for rule in self._sub_rules:
+            df = rule.apply(df, context)
+
+        # Drop experimenter speech rows
+        df = df[df['Type'] != 'Experimenter'].reset_index(drop=True)
+
+        # Ensure int types for timing columns
+        for col in ('Onset', 'Offset'):
+            if col in df.columns:
+                df[col] = df[col].astype(int)
+        return df
+
+
 OUTPUT_RULE_REGISTRY = {
     'UpperCase': UpperCase,
     'SuffixStripping': SuffixStripping,
@@ -312,6 +772,13 @@ OUTPUT_RULE_REGISTRY = {
     'MultiWordMerge': MultiWordMerge,
     'ListWordPreference': ListWordPreference,
     'WordpoolFilter': WordpoolFilter,
+    'VocalizationClassifier': VocalizationClassifier,
+    'BreathingNoiseDetection': BreathingNoiseDetection,
+    'FillerDetection': FillerDetection,
+    'ExperimenterSpeechFilter': ExperimenterSpeechFilter,
+    'SentenceDetection': SentenceDetection,
+    'IntrusionClassification': IntrusionClassification,
+    'ProperNounDetection': ProperNounDetection,
     'OnsetAdjust': OnsetAdjust,
     'LongDurationVocalization': LongDurationVocalization,
     'WordpoolIndex': WordpoolIndex,

@@ -29,7 +29,13 @@
       "Read(//home1/zrentala/automated_annotation/results/base-whisperx/annotation_gauntlet/session_0/whisperx_out/**)",
       "Bash(done)",
       "Read(//home1/zrentala/automated_annotation/dependencies/annotation_gauntlet/session_0/**)",
-      "Bash(python vocalization_processor.py)"
+      "Bash(python vocalization_processor.py)",
+      "Bash(ls /home1/zrentala/automated_annotation/intrusion_exploration/ltpfr2* /home1/zrentala/automated_annotation/intrusion_exploration/ltpFR2*)",
+      "Bash(find /data/eeg/scalp/ltp/ltpFR2/LTP093/session_0 -name *.wav)",
+      "Bash(head -5 /home1/zrentala/automated_annotation/results/comparison/*)",
+      "Bash(ls /data/eeg/scalp/ltp/ltpFR2/LTP093/*wordpool* /data/eeg/scalp/ltp/ltpFR2/LTP093/session_0/*.lst)",
+      "Bash(python run_vocalization_ltpfr2.py)",
+      "Bash(python -c \"from postprocessing import *; print\\(''Imports OK''\\); print\\(''Registry:'', list\\(OUTPUT_RULE_REGISTRY.keys\\(\\)\\)\\)\")"
     ]
   }
 }
