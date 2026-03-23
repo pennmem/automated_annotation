@@ -100,6 +100,11 @@ def find_sessions_needing_annotation(experiments):
                 logger.debug(f'Skipping (all ann files present): {session_dir}')
                 continue
 
+            # Skip sessions whose annotations have already been corrected via parsync
+            if os.path.exists(os.path.join(session_dir, 'CORRECTED_ANNOT')):
+                logger.debug(f'Skipping (corrected annotations): {session_dir}')
+                continue
+
             if not os.access(session_dir, os.W_OK):
                 logger.warning(f'Skipping (no write permission): {session_dir}')
                 continue
